@@ -139,6 +139,10 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
         <select id="cal"><option value="4">+4 dBu</option><option value="10">+10 dBu</option><option value="18" selected>+18 dBu</option><option value="24">+24 dBu</option></select></div>
     </div>
 
+    <div class="row">
+      <div class="small-knob"><label for="slew">Drive slew</label><input id="slew" type="range" min="0" max="200" step="1" value="30"><span class="mono" id="slew-val">30 ms</span></div>
+    </div>
+
     <dl class="facts">
       <dt>Trim R162 + R1 (gain leg)</dt><dd id="f-rg">–</dd>
       <dt>Preamp gain (U17/U25 → U33)</dt><dd id="f-pre">–</dd>
@@ -198,7 +202,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
     ['19 Bass', 'samples/19-bass-6a.wav'], ['Arabian Sub', 'samples/arabian-sub-6a.wav'],
     ['Aura Bass', 'samples/aura-bass-9b.wav'], ['Beta Bass', 'samples/beta-bass-11a.wav'],
   ];
-  const state = { drive: 0.3, input: 'line', loCut: false, outputDb: -6, calDbu: 18, bypass: false, loop: true };
+  const state = { drive: 0.3, driveSlewMs: 30, input: 'line', loCut: false, outputDb: -6, calDbu: 18, bypass: false, loop: true };
   const $ = (id) => document.getElementById(id);
   const fmtDb = (v) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + ' dB';
   const dbuToVpk = (dbu) => 0.7746 * Math.pow(10, dbu / 20) * Math.SQRT2;
@@ -206,7 +210,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
   // a local model instance only for the readouts (gain, Rg, corner)
   const probe = new Core.MackieChannel(48000);
   function params() {
-    return { drive: state.drive, input: state.input, loCut: state.loCut, outputDb: state.outputDb, fullScaleVolts: dbuToVpk(state.calDbu) };
+    return { drive: state.drive, driveSlewMs: state.driveSlewMs, input: state.input, loCut: state.loCut, outputDb: state.outputDb, fullScaleVolts: dbuToVpk(state.calDbu) };
   }
 
   /* ---------------- knob ---------------- */
@@ -270,6 +274,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
   const toggle = (id, key, after) => { $(id).onclick = () => { state[key] = !state[key]; $(id).setAttribute('aria-pressed', state[key]); after && after(); }; };
   toggle('locut', 'loCut', push); toggle('bypass', 'bypass', push); toggle('loop', 'loop', () => { if (src) src.loop = state.loop; });
   $('out').oninput = (e) => { state.outputDb = +e.target.value; $('out-val').textContent = fmtDb(state.outputDb); push(); };
+  $('slew').oninput = (e) => { state.driveSlewMs = +e.target.value; $('slew-val').textContent = state.driveSlewMs ? state.driveSlewMs + ' ms' : 'off'; push(); };
   $('cal').onchange = (e) => { state.calDbu = +e.target.value; push(); };
 
   /* ---------------- audio ---------------- */

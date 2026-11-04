@@ -97,6 +97,9 @@
   class Netlist {
     constructor() { this.els = []; this.inputs = []; this.outputs = {}; }
     R(a, b, r) { this.els.push({ k: 'R', a, b, r }); }
+    // variable resistor (a pot moved while running): stamped at its value from
+    // the last matrix build, plus a linear port carrying the difference
+    RV(a, b, r) { this.els.push({ k: 'RV', a, b, r }); }
     C(a, b, c, stiff) { this.els.push({ k: 'C', a, b, c, be: !!stiff }); }
     L(a, b, l, stiff) { this.els.push({ k: 'L', a, b, l, be: !!stiff }); }
     V(name, a) { this.inputs.push(name); this.els.push({ k: 'V', a, idx: this.inputs.length - 1 }); }
@@ -172,16 +175,19 @@
           devs.push({ k: 'Q', p: ports.length, Is: e.m.Is, Bf: e.m.Bf, Br: e.m.Br, Vaf: e.m.Vaf });
           ports.push(p1, p2);
         } else if (e.k === 'CLAMP') { devs.push({ k: 'CL', p: ports.length, hi: e.hi, lo: e.lo }); ports.push({ va: node(e.x), vb: -1, ia: node(e.x), ib: -1 }); }
+        else if (e.k === 'RV') { devs.push({ k: 'RV', p: ports.length, el: e }); ports.push({ va: node(e.a), vb: node(e.b), ia: node(e.a), ib: node(e.b) }); }
         else if (e.k === 'C' || e.k === 'L') reac.push({ a: node(e.a), b: node(e.b), k: e.k, val: e.k === 'C' ? e.c : e.l, be: e.be });
       }
       this.ports = ports; this.devs = devs; this.reac = reac;
-      const qa = [], da = [], ca = [], lim = new Int8Array(ports.length);
+      const qa = [], da = [], ca = [], rv = [], lim = new Int8Array(ports.length);
       for (const d of devs) {
         if (d.k === 'Q') { qa.push(d.p, d.Is, d.Bf, d.Br, d.Vaf); lim[d.p] = 1; lim[d.p + 1] = 1; }
         else if (d.k === 'D') { da.push(d.p, d.Is, d.nvt); lim[d.p] = 2; }
+        else if (d.k === 'RV') rv.push(d);
         else { ca.push(d.p, d.hi, d.lo); lim[d.p] = 3; }
       }
-      this.clampsOnly = qa.length === 0 && da.length === 0;
+      this.clampsOnly = qa.length === 0 && da.length === 0 && rv.length === 0;
+      this.RV = rv; this.RVg = new Float64Array(rv.length); // conductance change since the last build
       this.QA = Float64Array.from(qa); this.DA = Float64Array.from(da); this.CA = Float64Array.from(ca); this.lim = lim;
       this.limA = new Float64Array(ports.length); this.limB = new Float64Array(ports.length);
       for (const d of devs) { if (d.k === 'D') this.limA[d.p] = d.nvt; if (d.k === 'CL') { this.limA[d.p] = d.hi; this.limB[d.p] = d.lo; } }
@@ -207,11 +213,13 @@
       const stampG = (a, b, g) => { add(a, a, g); add(b, b, g); add(a, b, -g); add(b, a, -g); };
       for (const e of net.els) {
         if (e.k === 'R') stampG(node(e.a), node(e.b), 1 / (typeof e.r === 'function' ? e.r() : e.r));
+        else if (e.k === 'RV') { e.g0 = 1 / e.r(); stampG(node(e.a), node(e.b), e.g0); }
         else if (e.k === 'V') { const a = node(e.a), row = nn + e.idx; add(a, row, 1); add(row, a, 1); }
         else if (e.k === 'BUF') { const o = node(e.o), x = node(e.x); add(o, o, e.g); add(o, x, -e.g); }
         else if (e.k === 'GM') { const x = node(e.x); add(x, node(e.p), -e.gm); add(x, node(e.n), e.gm); }
       }
       for (const re of this.reac) { re.g = this.gOf(re, T); stampG(re.a, re.b, re.g); }
+      if (this.RVg) { this.RVg.fill(0); this.factored = false; }
       // tiny conductance to ground on every node keeps open-circuit nodes solvable
       for (let i = 0; i < nn; i++) M[i * N + i] += 1e-12;
       const S = invert(M, N);
@@ -274,6 +282,9 @@
         const e = x < 80 ? Math.exp(x) : 5.54062238439351e34 * (1 + x - 80);
         i[p] = Is * (e - 1); dI[2 * p] = Is * (x < 80 ? e : 5.54062238439351e34) / nvt + 1e-12; dI[2 * p + 1] = 0;
       }
+      // variable resistors: the conductance change, a linear port
+      const RV = this.RV, RVg = this.RVg;
+      for (let n = 0; n < RV.length; n++) { const p = RV[n].p, g = RVg[n]; i[p] = g * v[p]; dI[2 * p] = g; dI[2 * p + 1] = 0; }
       // swing clamps: packed [p, hi, lo]
       const CA = this.CA;
       for (let n = 0; n < CA.length; n += 3) {
@@ -351,6 +362,7 @@
             i[p] += dI[2 * p] * a1 + dI[2 * p + 1] * a2; i[p + 1] += dI[2 * p + 2] * a1 + dI[2 * p + 3] * a2; }
           for (let n = 0; n < this.DA.length; n += 3) { const p = this.DA[n]; i[p] += dI[2 * p] * dx[p]; }
           for (let n = 0; n < this.CA.length; n += 3) { const p = this.CA[n]; i[p] += dI[2 * p] * dx[p]; }
+          for (let n = 0; n < this.RV.length; n++) { const p = this.RV[n].p; i[p] += dI[2 * p] * dx[p]; }
           ok = true; break;
         }
         v0.set(v);
@@ -428,6 +440,16 @@
       this.vr.set(vr); this.physI.set(ir); this.v.set(v); this.factored = false;
     }
 
+    // Re-read the variable resistors' values. Exact at any value; call setT
+    // now and then during a long sweep to fold the change back into the matrices.
+    updateRV() {
+      const RV = this.RV, RVg = this.RVg;
+      for (let n = 0; n < RV.length; n++) {
+        const e = RV[n].el, g = 1 / e.r() - e.g0;
+        if (g !== RVg[n]) { RVg[n] = g; this.factored = false; }
+      }
+    }
+
     // One time step. If Newton fails (a hard switching event inside the step),
     // the step is redone as 8 sub-steps on a finer grid, recursively.
     step(u, depth = 0) {
@@ -442,6 +464,7 @@
         this.fine.dirty = false;
       }
       const F = this.fine;
+      F.updateRV();
       F.importState(this.vr, this.physI, this.vSave);
       F.uPrev.set(this.uPrev);
       const u0 = this.uPrev.slice(), ui = new Float64Array(u.length);
@@ -557,7 +580,7 @@
     n.Q('REF', 'BIAS', 'SEr', MODELS.MMBT4403); n.R('SEr', 'VCC', 2490); n.R('REF', 'VEE', 2490);                         // Q63 R426 R236(0R)+R267
     // gain leg between the emitters: C1 1000u, TRIM R162 + R1 3R32 (L1 4.7uH: see OMITTED)
     n.C('Ec', 'G1', 1000e-6);
-    n.R('G1', 'Eh', () => P.trimOhms + 3.32);
+    n.RV('G1', 'Eh', () => P.trimOhms + 3.32);
     // servo amps and feedback
     n.U('U17A', 'REF', 'Cc', 'Oc', 'NJM2068', VCC, VEE);
     n.U('U25A', 'REF', 'Ch', 'Oh', 'NJM2068', VCC, VEE);
@@ -627,6 +650,7 @@
   // manual. Choice: the taper that makes the printed gain scale even, i.e.
   // preamp gain linear in dB with rotation from the pot's 10K end to its 0R end.
   const RFB = 5110, RG_MIN = 3.32;
+  const DRIVE_TICK = 5e-3; // s between stage A rebuilds while Drive glides
   const GD_MIN = 1 + 2 * RFB / (10000 + RG_MIN), GD_MAX = 1 + 2 * RFB / RG_MIN;
   function trimResistance(rotation) {
     const r = Math.min(1, Math.max(0, rotation));
@@ -681,6 +705,7 @@
   // ===========================================================================
   const DEFAULTS = {
     drive: 0.3,            // TRIM rotation 0..1
+    driveSlewMs: 30,       // Drive smoothing time constant in ms (0 = jump)
     input: 'line',         // 'line' (J68, unbalanced TS plug) or 'mic' (J84, balanced)
     fullScaleVolts: 0.7746 * Math.pow(10, 18 / 20) * Math.SQRT2, // 0 dBFS = +18 dBu (EBU R68)
     loCut: false,
@@ -698,6 +723,8 @@
       this.p = Object.assign({}, DEFAULTS);
       for (const k of Object.keys(DEFAULTS)) if (opts[k] !== undefined) this.p[k] = opts[k];
       this.P = {}; // circuit-level values read by the netlists
+      this.driveNow = this.driveMid = this.p.drive; // smoothed TRIM rotation the circuit actually sees
+      this.slewCount = 0;
       this._derive();
       this.uA = new Float64Array(4); this.uB = new Float64Array(3); this.uC = new Float64Array(3);
       this.uA[2] = this.uB[1] = this.uC[1] = VCC; this.uA[3] = this.uB[2] = this.uC[2] = VEE;
@@ -710,7 +737,14 @@
 
     _derive() {
       const p = this.p, P = this.P;
-      P.trimOhms = trimResistance(p.drive);
+      P.trimOhms = trimResistance(this.driveNow);
+      // Drive slew: two one-poles in series (tau/2 each) on the rotation, so the
+      // glide starts and ends gently. The taper is dB-linear, so the gain glides
+      // evenly in dB. The trim is exact every sample through the variable-
+      // resistor port; stage A's matrices are rebuilt every DRIVE_TICK.
+      const tau = Math.max(0, p.driveSlewMs) / 1000;
+      this.slewA = tau > 0 ? 1 - Math.exp(-2 * this.T / tau) : 1;
+      this.slewTick = Math.max(1, Math.round(DRIVE_TICK / this.T));
       P.input = p.input; P.loCut = !!p.loCut;
       // pot ratio 0 is the boost end on all three EQ pots; controls are clockwise rotation
       P.hi = 1 - p.eqHigh; P.low = 1 - p.eqLow; P.mid = 1 - p.eqMid;
@@ -752,7 +786,7 @@
 
     setParams(o = {}) {
       let changed = false;
-      const stageOf = { drive: 'A', input: 'A', loCut: 'B', eqHigh: 'B', eqMid: 'B', eqLow: 'B', eqFreq: 'B', faderDb: 'C' };
+      const stageOf = { input: 'A', loCut: 'B', eqHigh: 'B', eqMid: 'B', eqLow: 'B', eqFreq: 'B', faderDb: 'C' };
       this.changed = this.changed || {};
       for (const k of Object.keys(DEFAULTS)) if (o[k] !== undefined && o[k] !== this.p[k]) {
         this.p[k] = o[k]; changed = true; if (stageOf[k]) this.changed[stageOf[k]] = true;
@@ -763,13 +797,14 @@
     }
 
     info() {
-      const rg = this.P.trimOhms + RG_MIN;
+      // readouts follow the knob (the target), not the gliding value
+      const rg = trimResistance(this.p.drive) + RG_MIN;
       const gd = 1 + 2 * RFB / rg;
       // line pad: R197 || R523 (phantom feed, via C349) against R220
       const shunt = 1 / (1 / 1500 + 1 / 6810);
       const pad = this.p.input === 'mic' ? 1 : shunt / (5620 + shunt);
       return {
-        trimOhms: this.P.trimOhms, gainLegOhms: rg,
+        trimOhms: rg - RG_MIN, gainLegOhms: rg, driveNow: this.driveNow,
         preGainDb: 20 * Math.log10(gd * 5110 / 10000),
         channelGainDb: 20 * Math.log10(pad * gd * 5110 / 10000),
         padDb: 20 * Math.log10(pad),
@@ -787,11 +822,21 @@
       if (this.pending) { this.pending = false; this._build(false); }
       const os = this.os, buf = this.osBuf, A = this.A, B = this.B, C = this.C, pk = this.peaks;
       const uA = this.uA, uB = this.uB, uC = this.uC, ia = this.ixA, ib = this.ixB, ic = this.ixC;
-      const mic = this.p.input === 'mic';
+      const mic = this.p.input === 'mic', target = this.p.drive;
+      let gliding = this.driveNow !== target;
       for (let s = 0; s < n; s++) {
         const up = this.ovs.up(input[s] * this.inGain);
         for (let k = 0; k < os; k++) {
           const v = up[k];
+          if (gliding) {
+            const a = this.slewA, m1 = this.driveMid += (target - this.driveMid) * a;
+            let d = this.driveNow + (m1 - this.driveNow) * a;
+            if (Math.abs(target - d) < 1e-5 && Math.abs(target - m1) < 1e-5) { d = this.driveMid = target; gliding = false; }
+            this.driveNow = d;
+            this.P.trimOhms = trimResistance(d);
+            if (!gliding || ++this.slewCount >= this.slewTick) { this.slewCount = 0; A.setT(this.T); }
+            else A.updateRV();
+          }
           if (mic) { uA[0] = 0.5 * v; uA[1] = -0.5 * v; } else { uA[0] = v; uA[1] = 0; }
           A.step(uA); this.steps++;
           const ya = A.y;

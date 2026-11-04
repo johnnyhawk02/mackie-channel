@@ -14,6 +14,8 @@ Each stage is a netlist of the real parts, solved every sample as a nonlinear ci
 - **Op-amps:** a macromodel. It has an input transconductance into a compensation integrator, set by GBW and A0, a smooth output-swing limit at the datasheet headroom, and the output resistance.
 - **Operating point:** found by ramping the ±16 V supplies up from zero, like powering on the desk.
 
+- **Drive slew:** the Drive knob glides rather than steps. Its rotation goes through two one-pole smoothers in series (30 ms by default, `driveSlewMs`, 0 turns it off), so the gain moves evenly in dB and starts and stops gently. The TRIM pot is a variable resistor in the netlist: it is stamped into the matrices at its last value, and a linear port carries the difference, so the circuit sees the exact resistance every sample without rebuilding the matrices each time. Moving the knob costs about nothing. `node tools/slew.js` measures the click from a jump: with no slew it is about 4 dB under the signal peak, with 30 ms it is 75–85 dB under.
+
 Nothing is a waveshaper. Clipping, sticking on the rails, the asymmetry and the recovery all come from the circuit.
 
 The DSP core (`mackie-channel-core.js`) has no UI or Web Audio code in it, so it can be ported to a plugin later.
