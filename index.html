@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VLZ Channel Drive</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a hardware channel strip on the left (the one Drive knob), a bench on the right (samples, stage headroom, scope). */
+:root {
+  --bg: #e4e6e3;          /* bench */
+  --panel: #c9ccc8;       /* brushed-aluminium strip */
+  --panel-edge: #a9ada8;
+  --ink: #1d2124;         /* silkscreen */
+  --ink-soft: #565d61;
+  --card: #f3f4f2;
+  --cap: #23272a;         /* knob cap */
+  --cap-hi: #3b4246;
+  --pointer: #e9e6dc;
+  --accent: #d2561e;      /* the trim knob's orange ring */
+  --ok: #2f9a4a; --warn: #d6a215; --hot: #d23a2a;
+  --meter-off: #b9bdb8;
+  --scope-bg: #1f2528; --scope-grid: #34403f; --scope-dry: #6c7a7c; --scope-wet: #f08a4b;
+  --f-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191b; --panel: #2a3033; --panel-edge: #3b4347; --ink: #e7e9e4; --ink-soft: #9aa4a7; --card: #1e2326;
+  --cap: #101315; --cap-hi: #2a3134; --pointer: #f1eee4; --accent: #ea6a2c; --meter-off: #384044;
+  --scope-bg: #0d1012; --scope-grid: #233032; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #15191b; --panel: #2a3033; --panel-edge: #3b4347; --ink: #e7e9e4; --ink-soft: #9aa4a7; --card: #1e2326;
+  --cap: #101315; --cap-hi: #2a3134; --pointer: #f1eee4; --accent: #ea6a2c; --meter-off: #384044;
+  --scope-bg: #0d1012; --scope-grid: #233032; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 40px }
+.wrap { max-width: 1060px; margin: 0 auto; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start }
+@media (max-width: 760px) { .wrap { grid-template-columns: 1fr } }
+h1, h2, .silk { font-family: var(--f-display); text-transform: uppercase; letter-spacing: .08em }
+h1 { font-size: 15px; font-weight: 700; margin: 0 }
+h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px; color: var(--ink-soft) }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+
+/* strip */
+.strip { background: linear-gradient(90deg, var(--panel-edge), var(--panel) 6%, var(--panel) 94%, var(--panel-edge));
+  border-radius: 6px; padding: 18px 20px 22px; display: flex; flex-direction: column; align-items: center; gap: 18px }
+.strip header { width: 100%; display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--ink-soft); padding-bottom: 8px }
+.strip header span { font-family: var(--f-mono); font-size: 11px; color: var(--ink-soft) }
+.seg { display: flex; border: 1px solid var(--ink-soft); border-radius: 3px; overflow: hidden }
+.seg button { font: 600 13px var(--f-display); letter-spacing: .08em; text-transform: uppercase; background: transparent; color: var(--ink);
+  border: 0; padding: 6px 14px; cursor: pointer }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--panel) }
+.knob-area { position: relative; width: 236px; height: 236px; touch-action: none }
+.knob-area svg { width: 100%; height: 100%; display: block }
+.knob-area:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 50% }
+.knob-label { text-align: center; display: grid; gap: 2px }
+.knob-label .silk { font-size: 22px; font-weight: 700 }
+.knob-label .mono { font-size: 13px; color: var(--ink-soft) }
+.row { display: flex; gap: 14px; align-items: center; justify-content: center; flex-wrap: wrap; width: 100% }
+.btn { font: 600 13px var(--f-display); letter-spacing: .08em; text-transform: uppercase; background: var(--card); color: var(--ink);
+  border: 1px solid var(--ink-soft); border-radius: 3px; padding: 7px 14px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center }
+.btn[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent) }
+.btn:focus-visible, .seg button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.led { width: 9px; height: 9px; border-radius: 50%; background: var(--meter-off); flex: none }
+.led.on-ok { background: var(--ok); box-shadow: 0 0 6px var(--ok) }
+.led.on-hot { background: var(--hot); box-shadow: 0 0 8px var(--hot) }
+.ol { display: flex; gap: 8px; align-items: center; font: 600 13px var(--f-display); letter-spacing: .08em }
+.small-knob { display: flex; flex-direction: column; align-items: center; gap: 4px }
+.small-knob label { font: 600 12px var(--f-display); letter-spacing: .08em; text-transform: uppercase }
+.small-knob input[type=range] { width: 110px; accent-color: var(--accent) }
+.facts { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-size: 12px; border-top: 1px solid var(--ink-soft); padding-top: 10px }
+.facts dt { color: var(--ink-soft) } .facts dd { margin: 0; text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+
+/* bench */
+.bench { display: grid; gap: 16px; min-width: 0 }
+.card { background: var(--card); border-radius: 6px; padding: 16px 18px; min-width: 0 }
+.samples { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px }
+.samples .btn { justify-content: flex-start; text-transform: none; font: 500 13px var(--f-body); letter-spacing: 0 }
+.drop { margin-top: 10px; border: 1px dashed var(--ink-soft); border-radius: 4px; padding: 12px; text-align: center; color: var(--ink-soft); font-size: 13px }
+.drop.over { border-color: var(--accent); color: var(--ink) }
+.drop label { color: var(--accent); cursor: pointer; text-decoration: underline }
+.transport { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px }
+.status { font-size: 12px; color: var(--ink-soft); margin-left: auto }
+.meters { display: grid; gap: 9px }
+.meter { display: grid; grid-template-columns: 150px minmax(0, 1fr) 64px; gap: 10px; align-items: center; font-size: 12px }
+.meter .name b { font-weight: 500; display: block } .meter .name span { color: var(--ink-soft); font-family: var(--f-mono); font-size: 11px }
+.bar { height: 10px; background: var(--meter-off); border-radius: 2px; position: relative; overflow: hidden }
+.bar i { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, var(--ok) 0 70%, var(--warn) 70% 90%, var(--hot) 90%); background-size: var(--full, 300px) 100% }
+.meter .val { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+.meter.clip .val { color: var(--hot); font-weight: 500 }
+.scale-note { font-size: 11px; color: var(--ink-soft); margin-top: 8px }
+canvas { width: 100%; height: 160px; display: block; border-radius: 4px; background: var(--scope-bg) }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-soft); margin-top: 8px }
+.legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px }
+details summary { cursor: pointer; font: 600 13px var(--f-display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft) }
+details p, details li { max-width: 68ch; font-size: 13px }
+details ol { padding-left: 20px; margin: 8px 0 }
+select { font: 13px var(--f-body); background: var(--card); color: var(--ink); border: 1px solid var(--ink-soft); border-radius: 3px; padding: 4px 6px }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <section class="strip" aria-label="Channel strip">
+    <header><h1>CR1604-VLZ · Ch 1</h1><span><a href="https://github.com/johnnyhawk02/mackie-channel" style="color:inherit">source</a></span></header>
+
+    <div class="seg" role="group" aria-label="Input jack">
+      <button id="in-line" aria-pressed="true">Line in</button>
+      <button id="in-mic" aria-pressed="false">Mic in</button>
+    </div>
+
+    <div class="knob-area" id="knob" role="slider" tabindex="0" aria-label="Drive (trim)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="30">
+      <svg viewBox="0 0 236 236" aria-hidden="true">
+        <g id="ticks"></g>
+        <circle cx="118" cy="118" r="70" fill="var(--accent)"/>
+        <circle cx="118" cy="118" r="64" fill="var(--cap)"/>
+        <circle cx="118" cy="118" r="52" fill="var(--cap-hi)"/>
+        <g id="pointer"><rect x="115.5" y="56" width="5" height="34" rx="2.5" fill="var(--pointer)"/></g>
+      </svg>
+    </div>
+    <div class="knob-label">
+      <span class="silk">Drive</span>
+      <span class="mono" id="gain-readout">+5.9 dB channel gain</span>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="locut" aria-pressed="false">75 Hz Lo cut</button>
+      <span class="ol"><span class="led" id="ol-led"></span>OL</span>
+    </div>
+
+    <div class="row">
+      <div class="small-knob"><label for="out">Output</label><input id="out" type="range" min="-30" max="6" step="0.5" value="-6"><span class="mono" id="out-val">−6.0 dB</span></div>
+      <div class="small-knob"><label for="cal">0 dBFS at jack</label>
+        <select id="cal"><option value="4">+4 dBu</option><option value="10">+10 dBu</option><option value="18" selected>+18 dBu</option><option value="24">+24 dBu</option></select></div>
+    </div>
+
+    <dl class="facts">
+      <dt>Trim R162 + R1 (gain leg)</dt><dd id="f-rg">–</dd>
+      <dt>Preamp gain (U17/U25 → U33)</dt><dd id="f-pre">–</dd>
+      <dt>C1 1000 µF low corner</dt><dd id="f-c1">–</dd>
+      <dt>Input pad (R220/R197)</dt><dd id="f-pad">–</dd>
+    </dl>
+  </section>
+
+  <div class="bench">
+    <section class="card" aria-labelledby="h-src">
+      <h2 id="h-src">Test signal</h2>
+      <div class="samples" id="sample-list"></div>
+      <div class="drop" id="drop">Drop a WAV/AIFF/MP3 here or <label for="file">choose a file</label><input id="file" type="file" accept="audio/*" hidden></div>
+      <div class="transport">
+        <button class="btn" id="play">▶ Play</button>
+        <button class="btn" id="loop" aria-pressed="true">Loop</button>
+        <button class="btn" id="bypass" aria-pressed="false">Bypass</button>
+        <span class="status" id="status">Pick a sample to start.</span>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-meters">
+      <h2 id="h-meters">Headroom at each op-amp</h2>
+      <div class="meters" id="meters"></div>
+      <p class="scale-note">Peak output volts against each op-amp's rail on the ±16 V supply. The bar is 30 dB wide and the last tenth is the clip knee.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-scope">
+      <h2 id="h-scope">Scope</h2>
+      <canvas id="scope" width="1200" height="320"></canvas>
+      <div class="legend"><span><i style="background:var(--scope-dry)"></i>Jack input</span><span><i style="background:var(--scope-wet)"></i>Channel output (U103A)</span></div>
+    </section>
+
+    <section class="card">
+      <details>
+        <summary>What is modelled</summary>
+        <ol>
+          <li><b>Line jack J68</b>: 5K62 series (R220/R212) into 1K50 shunt (R197/R168), a −13.5 dB pad, driven unbalanced so half the signal also arrives as common mode.</li>
+          <li><b>Preamp</b>: Q24/Q8 2SA1084 pair with NJM2068 feedback amps U17A/U25A. Gain is 1 + 2·5K11 / (trim + 3.32 Ω + C1). The 1000 µF C1 in the gain leg makes the gain fall back towards unity below a corner that rises to 48 Hz at full drive, so the bottom octave is driven less than the rest.</li>
+          <li><b>U33A</b> differential amp, gain 5K11/10K = 0.511.</li>
+          <li><b>Insert and main-board coupling</b> (C94/R167, C121/R137), which lets a lopsided clip settle around its own DC.</li>
+          <li><b>Lo cut</b> U104A, 3rd-order 75 Hz high pass, when switched in.</li>
+          <li><b>EQ stage</b> U101/U105 at flat, unity gain, NJM4560 swing.</li>
+          <li><b>Fader at U</b>, 10 dB down at the wiper of R107, then U103A making it back up with 1 + 1K1/510.</li>
+        </ol>
+        <p>Every op-amp output bends into its rail (about ±14 V; the small +/− mismatch is an estimate). Clipping runs at 4× oversampling.</p>
+      </details>
+    </section>
+  </div>
+</div>
+
+<script src="mackie-channel-core.js"></script>
+<script>
+(() => {
+  const Core = window.MackieChannelCore;
+  const SAMPLES = [
+    ['19 Bass', 'samples/19-bass-6a.wav'], ['Arabian Sub', 'samples/arabian-sub-6a.wav'],
+    ['Aura Bass', 'samples/aura-bass-9b.wav'], ['Beta Bass', 'samples/beta-bass-11a.wav'],
+  ];
+  const state = { drive: 0.3, input: 'line', loCut: false, outputDb: -6, calDbu: 18, bypass: false, loop: true };
+  const $ = (id) => document.getElementById(id);
+  const fmtDb = (v) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + ' dB';
+  const dbuToVpk = (dbu) => 0.7746 * Math.pow(10, dbu / 20) * Math.SQRT2;
+
+  // a local model instance only for the readouts (gain, Rg, corner)
+  const probe = new Core.MackieChannel(48000);
+  function params() {
+    return { drive: state.drive, input: state.input, loCut: state.loCut, outputDb: state.outputDb, fullScaleVolts: dbuToVpk(state.calDbu) };
+  }
+
+  /* ---------------- knob ---------------- */
+  const A0 = -135, A1 = 135; // degrees
+  const ticksG = $('ticks');
+  function gainAt(rot, input) { probe.setParams({ drive: rot, input }); probe._updatePreCoefs(true); return probe.info(); }
+  function drawTicks() {
+    const ns = 'http://www.w3.org/2000/svg'; ticksG.innerHTML = '';
+    const lo = gainAt(0, state.input).channelGainDb, hi = gainAt(1, state.input).channelGainDb;
+    const marks = state.input === 'mic' ? [0, 10, 20, 30, 40, 50, 60] : [-10, 0, 10, 20, 30, 40, 50];
+    const angOf = (db) => A0 + (db - lo) / (hi - lo) * (A1 - A0);
+    for (let i = 0; i <= 40; i++) { // fine ticks
+      const a = (A0 + i / 40 * (A1 - A0)) * Math.PI / 180, r0 = 78, r1 = i % 5 ? 83 : 86;
+      const l = document.createElementNS(ns, 'line');
+      l.setAttribute('x1', 118 + r0 * Math.sin(a)); l.setAttribute('y1', 118 - r0 * Math.cos(a));
+      l.setAttribute('x2', 118 + r1 * Math.sin(a)); l.setAttribute('y2', 118 - r1 * Math.cos(a));
+      l.setAttribute('stroke', 'var(--ink-soft)'); l.setAttribute('stroke-width', '1.2'); ticksG.appendChild(l);
+    }
+    for (const m of marks) {
+      if (m < lo || m > hi) continue;
+      const a = angOf(m) * Math.PI / 180;
+      const t = document.createElementNS(ns, 'text');
+      t.setAttribute('x', 118 + 101 * Math.sin(a)); t.setAttribute('y', 118 - 101 * Math.cos(a) + 4);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', 'var(--ink)');
+      t.setAttribute('font-family', 'Barlow Condensed, Arial Narrow, sans-serif'); t.setAttribute('font-size', '14'); t.setAttribute('font-weight', '600');
+      t.textContent = state.input === 'line' && m === 0 ? 'U' : (m > 0 ? '+' + m : m);
+      ticksG.appendChild(t);
+    }
+  }
+  function renderKnob() {
+    $('pointer').setAttribute('transform', `rotate(${A0 + state.drive * (A1 - A0)} 118 118)`);
+    $('knob').setAttribute('aria-valuenow', Math.round(state.drive * 100));
+    const i = gainAt(state.drive, state.input);
+    $('gain-readout').textContent = fmtDb(i.channelGainDb) + ' channel gain';
+    $('knob').setAttribute('aria-valuetext', fmtDb(i.channelGainDb));
+    $('f-rg').textContent = i.gainLegOhms >= 1000 ? (i.gainLegOhms / 1000).toFixed(2) + ' kΩ' : i.gainLegOhms.toFixed(1) + ' Ω';
+    $('f-pre').textContent = fmtDb(i.preGainDb);
+    $('f-c1').textContent = i.c1CornerHz < 1 ? i.c1CornerHz.toFixed(2) + ' Hz' : i.c1CornerHz.toFixed(1) + ' Hz';
+    $('f-pad').textContent = state.input === 'mic' ? '0.0 dB' : '−13.5 dB';
+  }
+  function setDrive(v) { state.drive = Math.min(1, Math.max(0, v)); renderKnob(); push(); }
+  const knob = $('knob'); let drag = null;
+  knob.addEventListener('pointerdown', (e) => { knob.setPointerCapture(e.pointerId); drag = { y: e.clientY, x: e.clientX, v: state.drive }; knob.focus(); });
+  knob.addEventListener('pointermove', (e) => { if (!drag) return; const fine = e.shiftKey ? 0.2 : 1;
+    setDrive(drag.v + ((drag.y - e.clientY) + (e.clientX - drag.x)) / 260 * fine); });
+  knob.addEventListener('pointerup', () => { drag = null; });
+  knob.addEventListener('pointercancel', () => { drag = null; });
+  knob.addEventListener('wheel', (e) => { e.preventDefault(); setDrive(state.drive - Math.sign(e.deltaY) * (e.shiftKey ? 0.004 : 0.02)); }, { passive: false });
+  knob.addEventListener('dblclick', () => setDrive(0.3));
+  knob.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 0.005 : 0.02;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') setDrive(state.drive + step);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') setDrive(state.drive - step);
+    else if (e.key === 'Home') setDrive(0); else if (e.key === 'End') setDrive(1); else return;
+    e.preventDefault();
+  });
+
+  /* ---------------- controls ---------------- */
+  function setInput(m) { state.input = m; $('in-line').setAttribute('aria-pressed', m === 'line'); $('in-mic').setAttribute('aria-pressed', m === 'mic'); drawTicks(); renderKnob(); push(); }
+  $('in-line').onclick = () => setInput('line'); $('in-mic').onclick = () => setInput('mic');
+  const toggle = (id, key, after) => { $(id).onclick = () => { state[key] = !state[key]; $(id).setAttribute('aria-pressed', state[key]); after && after(); }; };
+  toggle('locut', 'loCut', push); toggle('bypass', 'bypass', push); toggle('loop', 'loop', () => { if (src) src.loop = state.loop; });
+  $('out').oninput = (e) => { state.outputDb = +e.target.value; $('out-val').textContent = fmtDb(state.outputDb); push(); };
+  $('cal').onchange = (e) => { state.calDbu = +e.target.value; push(); };
+
+  /* ---------------- audio ---------------- */
+  let ctx = null, node = null, port = null, spModels = null, src = null, buffer = null, playing = false, anIn, anOut, latestPeaks = null;
+  const status = (t) => { $('status').textContent = t; };
+  function push() {
+    const msg = { params: params(), bypass: state.bypass };
+    if (port) port.postMessage(msg);
+    if (spModels) spModels.forEach((m) => m.setParams(msg.params));
+  }
+  const workletSource = () => `
+    const { MackieChannel } = (${Core.factory.toString()})();
+    class MackieChannelProcessor extends AudioWorkletProcessor {
+      constructor() { super(); this.ch = []; this.params = {}; this.bypass = false; this.n = 0;
+        this.port.onmessage = (e) => { const d = e.data;
+          if (d.params) { this.params = d.params; this.ch.forEach((c) => c.setParams(d.params)); }
+          if ('bypass' in d) this.bypass = d.bypass; }; }
+      process(inputs, outputs) {
+        const inp = inputs[0], out = outputs[0];
+        for (let c = 0; c < out.length; c++) {
+          const x = inp[c] || inp[0];
+          if (!x) { out[c].fill(0); continue; }
+          if (!this.ch[c]) this.ch[c] = new MackieChannel(sampleRate, this.params);
+          if (this.bypass) { out[c].set(x); this.ch[c].process(x, new Float32Array(x.length)); }
+          else this.ch[c].process(x, out[c]);
+        }
+        if (++this.n >= 4 && this.ch[0]) { this.n = 0;
+          const p = this.ch[0].readPeaks(); if (this.ch[1]) { const q = this.ch[1].readPeaks(); for (const k in p) p[k] = Math.max(p[k], q[k]); }
+          this.port.postMessage({ peaks: p }); }
+        return true;
+      }
+    }
+    registerProcessor('mackie-channel', MackieChannelProcessor);`;
+  async function ensureAudio() {
+    if (ctx) { if (ctx.state === 'suspended') await ctx.resume(); return; }
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    anIn = ctx.createAnalyser(); anOut = ctx.createAnalyser(); anIn.fftSize = anOut.fftSize = 4096;
+    try {
+      const url = URL.createObjectURL(new Blob([workletSource()], { type: 'application/javascript' }));
+      await ctx.audioWorklet.addModule(url);
+      node = new AudioWorkletNode(ctx, 'mackie-channel', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+      port = node.port; port.onmessage = (e) => { if (e.data.peaks) latestPeaks = e.data.peaks; };
+    } catch (err) {
+      // fallback: ScriptProcessor on the main thread, same core
+      node = ctx.createScriptProcessor(1024, 2, 2); spModels = [0, 1].map(() => new Core.MackieChannel(ctx.sampleRate, params()));
+      const scratch = new Float32Array(1024);
+      node.onaudioprocess = (e) => {
+        for (let c = 0; c < 2; c++) { const x = e.inputBuffer.getChannelData(Math.min(c, e.inputBuffer.numberOfChannels - 1)), y = e.outputBuffer.getChannelData(c);
+          if (state.bypass) { y.set(x); spModels[c].process(x, scratch); } else spModels[c].process(x, y); }
+        const p = spModels[0].readPeaks(), q = spModels[1].readPeaks(); for (const k in p) p[k] = Math.max(p[k], q[k]); latestPeaks = p;
+      };
+    }
+    node.connect(anOut); anOut.connect(ctx.destination);
+    push();
+    requestAnimationFrame(frame);
+  }
+  async function loadArrayBuffer(ab, name) {
+    await ensureAudio();
+    try { buffer = await ctx.decodeAudioData(ab); }
+    catch { status(`Could not decode ${name}. Try a WAV, AIFF or MP3 file.`); return; }
+    status(`${name} · ${buffer.duration.toFixed(2)} s · ${buffer.numberOfChannels === 2 ? 'stereo' : 'mono'}`);
+    start();
+  }
+  function stop() { if (src) { try { src.stop(); } catch {} src.disconnect(); src = null; } playing = false; $('play').textContent = '▶ Play'; }
+  function start() {
+    if (!buffer) return; stop();
+    src = ctx.createBufferSource(); src.buffer = buffer; src.loop = state.loop;
+    src.connect(node); src.connect(anIn); src.start(); playing = true; $('play').textContent = '■ Stop';
+    src.onended = () => { if (!state.loop) stop(); };
+  }
+  $('play').onclick = async () => { await ensureAudio(); if (playing) stop(); else if (buffer) start(); else status('Pick a sample first.'); };
+
+  const list = $('sample-list');
+  SAMPLES.forEach(([name, url]) => {
+    const b = document.createElement('button'); b.className = 'btn'; b.textContent = name;
+    b.onclick = async () => {
+      list.querySelectorAll('.btn').forEach((x) => x.setAttribute('aria-pressed', x === b));
+      try { const r = await fetch(url); if (!r.ok) throw 0; await loadArrayBuffer(await r.arrayBuffer(), name); }
+      catch { status(`Couldn't load ${name} from ${url}. If you opened this page as a local file, drop the WAV in instead.`); }
+    };
+    list.appendChild(b);
+  });
+  const readFile = (f) => { if (!f) return; list.querySelectorAll('.btn').forEach((x) => x.setAttribute('aria-pressed', false)); f.arrayBuffer().then((ab) => loadArrayBuffer(ab, f.name)); };
+  $('file').onchange = (e) => readFile(e.target.files[0]);
+  const drop = $('drop');
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); readFile(e.dataTransfer.files[0]); });
+
+  /* ---------------- meters + scope ---------------- */
+  const STAGES = [
+    ['pre', 'Preamp', 'U17A / U25A · NJM2068', Core.RAILS.NJM2068],
+    ['diff', 'Diff amp', 'U33A · NJM2068', Core.RAILS.NJM2068],
+    ['eq', 'EQ stage', 'U101B · NJM4560', Core.RAILS.NJM4560],
+    ['fader', 'Fader amp', 'U103A · NJM4560', Core.RAILS.NJM4560],
+  ];
+  const meters = $('meters'), held = {}; let lastT = performance.now(), olUntil = 0;
+  STAGES.forEach(([k, name, part]) => {
+    const row = document.createElement('div'); row.className = 'meter'; row.id = 'm-' + k;
+    row.innerHTML = `<div class="name"><b>${name}</b><span>${part}</span></div><div class="bar"><i></i></div><div class="val">–</div>`;
+    meters.appendChild(row); held[k] = 0;
+  });
+  function updateMeters() {
+    const now = performance.now(), decay = Math.exp(-(now - lastT) / 400); lastT = now;
+    const p = latestPeaks || {}; latestPeaks = null; let anyClip = false, anySignal = false;
+    STAGES.forEach(([k, , , r]) => {
+      const lim0 = Math.min(r.pos, -r.neg);
+      if ((p[k] || 0) > r.knee * lim0) olUntil = now + 350;   // OL latches like the panel LED
+      held[k] = Math.max(p[k] || 0, held[k] * decay);
+      const lim = Math.min(r.pos, -r.neg), db = 20 * Math.log10(Math.max(held[k], 1e-6) / lim);
+      const row = $('m-' + k), bar = row.querySelector('i'), fr = Math.max(0, Math.min(1, (db + 30) / 30));
+      const full = row.querySelector('.bar').clientWidth;
+      bar.style.width = (fr * 100) + '%'; bar.style.setProperty('--full', full + 'px');
+      const clip = held[k] > r.knee * lim * 0.97; row.classList.toggle('clip', clip); anySignal ||= db > -40;
+      row.querySelector('.val').textContent = held[k] < 0.01 ? '–' : held[k].toFixed(1) + ' V';
+    });
+    $('ol-led').className = 'led' + (now < olUntil && playing ? ' on-hot' : anySignal && playing ? ' on-ok' : '');
+  }
+  const cv = $('scope'), g = cv.getContext('2d'), bufIn = new Float32Array(4096), bufOut = new Float32Array(4096);
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function drawScope() {
+    const W = cv.width, H = cv.height; g.fillStyle = cssVar('--scope-bg'); g.fillRect(0, 0, W, H);
+    g.strokeStyle = cssVar('--scope-grid'); g.lineWidth = 1;
+    for (let i = 1; i < 8; i++) { g.beginPath(); g.moveTo(i * W / 8, 0); g.lineTo(i * W / 8, H); g.stroke(); }
+    for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(0, i * H / 4); g.lineTo(W, i * H / 4); g.stroke(); }
+    if (!anIn) return;
+    anIn.getFloatTimeDomainData(bufIn); anOut.getFloatTimeDomainData(bufOut);
+    let t = 0; for (let i = 1; i < 2048; i++) if (bufOut[i - 1] < 0 && bufOut[i] >= 0) { t = i; break; } // trigger
+    const N = 2048, plot = (b, col, w) => { g.strokeStyle = col; g.lineWidth = w; g.beginPath();
+      for (let i = 0; i < N; i++) { const x = i / N * W, y = H / 2 - b[t + i] * H * 0.46; i ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke(); };
+    plot(bufIn, cssVar('--scope-dry'), 2); plot(bufOut, cssVar('--scope-wet'), 3);
+  }
+  function frame() { updateMeters(); drawScope(); requestAnimationFrame(frame); }
+
+  drawTicks(); renderKnob(); drawScope();
+})();
+</script>
+</body>
+</html>
