@@ -109,12 +109,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
   <section class="strip" aria-label="Channel strip">
     <header><h1>CR1604-VLZ · Ch 1</h1><span><a href="https://github.com/johnnyhawk02/mackie-channel" style="color:inherit">source</a></span></header>
 
-    <div class="seg" role="group" aria-label="Input jack">
-      <button id="in-line" aria-pressed="true">Line in</button>
-      <button id="in-mic" aria-pressed="false">Mic in</button>
-    </div>
-
-    <div class="knob-area" id="knob" role="slider" tabindex="0" aria-label="Drive (trim)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="30">
+    <div class="knob-area" id="knob" role="slider" tabindex="0" aria-label="Drive (trim)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
       <svg viewBox="0 0 236 236" aria-hidden="true">
         <g id="ticks"></g>
         <circle cx="118" cy="118" r="70" fill="var(--accent)"/>
@@ -129,18 +124,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
     </div>
 
     <div class="row">
-      <button class="btn" id="locut" aria-pressed="false">75 Hz Lo cut</button>
       <span class="ol"><span class="led" id="ol-led"></span>OL</span>
-    </div>
-
-    <div class="row">
-      <div class="small-knob"><label for="out">Output</label><input id="out" type="range" min="-30" max="6" step="0.5" value="-6"><span class="mono" id="out-val">−6.0 dB</span></div>
-      <div class="small-knob"><label for="cal">0 dBFS at jack</label>
-        <select id="cal"><option value="4">+4 dBu</option><option value="10">+10 dBu</option><option value="18" selected>+18 dBu</option><option value="24">+24 dBu</option></select></div>
-    </div>
-
-    <div class="row">
-      <div class="small-knob"><label for="slew">Drive slew</label><input id="slew" type="range" min="0" max="200" step="1" value="30"><span class="mono" id="slew-val">30 ms</span></div>
     </div>
 
     <dl class="facts">
@@ -148,6 +132,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
       <dt>Preamp gain (U17/U25 → U33)</dt><dd id="f-pre">–</dd>
       <dt>C1 1000 µF low corner</dt><dd id="f-c1">–</dd>
       <dt>Input pad (R220/R197)</dt><dd id="f-pad">–</dd>
+      <dt>Auto level</dt><dd id="f-auto">–</dd>
     </dl>
   </section>
 
@@ -202,15 +187,14 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
     ['19 Bass', 'samples/19-bass-6a.wav'], ['Arabian Sub', 'samples/arabian-sub-6a.wav'],
     ['Aura Bass', 'samples/aura-bass-9b.wav'], ['Beta Bass', 'samples/beta-bass-11a.wav'],
   ];
-  const state = { drive: 0.3, driveSlewMs: 30, input: 'line', loCut: false, outputDb: -6, calDbu: 18, bypass: false, loop: true };
+  const state = { drive: 0, input: 'line', bypass: false, loop: true };
   const $ = (id) => document.getElementById(id);
   const fmtDb = (v) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + ' dB';
-  const dbuToVpk = (dbu) => 0.7746 * Math.pow(10, dbu / 20) * Math.SQRT2;
 
   // a local model instance only for the readouts (gain, Rg, corner)
   const probe = new Core.MackieChannel(48000);
   function params() {
-    return { drive: state.drive, driveSlewMs: state.driveSlewMs, input: state.input, loCut: state.loCut, outputDb: state.outputDb, fullScaleVolts: dbuToVpk(state.calDbu) };
+    return { drive: state.drive }; // everything else stays at the core's defaults (line in, auto level on)
   }
 
   /* ---------------- knob ---------------- */
@@ -250,6 +234,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
     $('f-pre').textContent = fmtDb(i.preGainDb);
     $('f-c1').textContent = i.c1CornerHz < 1 ? i.c1CornerHz.toFixed(2) + ' Hz' : i.c1CornerHz.toFixed(1) + ' Hz';
     $('f-pad').textContent = fmtDb(i.padDb);
+    $('f-auto').textContent = fmtDb(i.autoLevelDb);
   }
   function setDrive(v) { state.drive = Math.min(1, Math.max(0, v)); renderKnob(); push(); }
   const knob = $('knob'); let drag = null;
@@ -259,7 +244,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
   knob.addEventListener('pointerup', () => { drag = null; });
   knob.addEventListener('pointercancel', () => { drag = null; });
   knob.addEventListener('wheel', (e) => { e.preventDefault(); setDrive(state.drive - Math.sign(e.deltaY) * (e.shiftKey ? 0.004 : 0.02)); }, { passive: false });
-  knob.addEventListener('dblclick', () => setDrive(0.3));
+  knob.addEventListener('dblclick', () => setDrive(0));
   knob.addEventListener('keydown', (e) => {
     const step = e.shiftKey ? 0.005 : 0.02;
     if (e.key === 'ArrowUp' || e.key === 'ArrowRight') setDrive(state.drive + step);
@@ -269,13 +254,8 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
   });
 
   /* ---------------- controls ---------------- */
-  function setInput(m) { state.input = m; $('in-line').setAttribute('aria-pressed', m === 'line'); $('in-mic').setAttribute('aria-pressed', m === 'mic'); drawTicks(); renderKnob(); push(); }
-  $('in-line').onclick = () => setInput('line'); $('in-mic').onclick = () => setInput('mic');
   const toggle = (id, key, after) => { $(id).onclick = () => { state[key] = !state[key]; $(id).setAttribute('aria-pressed', state[key]); after && after(); }; };
-  toggle('locut', 'loCut', push); toggle('bypass', 'bypass', push); toggle('loop', 'loop', () => { if (src) src.loop = state.loop; });
-  $('out').oninput = (e) => { state.outputDb = +e.target.value; $('out-val').textContent = fmtDb(state.outputDb); push(); };
-  $('slew').oninput = (e) => { state.driveSlewMs = +e.target.value; $('slew-val').textContent = state.driveSlewMs ? state.driveSlewMs + ' ms' : 'off'; push(); };
-  $('cal').onchange = (e) => { state.calDbu = +e.target.value; push(); };
+  toggle('bypass', 'bypass', push); toggle('loop', 'loop', () => { if (src) src.loop = state.loop; });
 
   /* ---------------- audio ---------------- */
   let ctx = null, node = null, port = null, spModels = null, src = null, buffer = null, playing = false, anIn, anOut, latestPeaks = null;

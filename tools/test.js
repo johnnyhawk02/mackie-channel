@@ -2,7 +2,7 @@
 const { MackieChannel } = require('../mackie-channel-core.js');
 const fs = 48000;
 function measure(opts, f, ampDbfs, secs = 0.4) {
-  const m = new MackieChannel(fs, opts); const N = Math.round(fs * secs); const x = new Float32Array(N), amp = Math.pow(10, ampDbfs / 20);
+  const m = new MackieChannel(fs, Object.assign({ autoLevel: false }, opts)); const N = Math.round(fs * secs); const x = new Float32Array(N), amp = Math.pow(10, ampDbfs / 20);
   for (let i = 0; i < N; i++) x[i] = amp * Math.sin(2 * Math.PI * f * i / fs);
   const t0 = process.hrtime.bigint(); const y = m.process(x, new Float32Array(N)); const dt = Number(process.hrtime.bigint() - t0) / 1e9;
   const s = y.subarray(Math.round(N / 2)), harm = [];

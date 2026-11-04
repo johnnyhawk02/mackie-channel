@@ -14,7 +14,8 @@ Each stage is a netlist of the real parts, solved every sample as a nonlinear ci
 - **Op-amps:** a macromodel. It has an input transconductance into a compensation integrator, set by GBW and A0, a smooth output-swing limit at the datasheet headroom, and the output resistance.
 - **Operating point:** found by ramping the ±16 V supplies up from zero, like powering on the desk.
 
-- **Drive slew:** the Drive knob glides rather than steps. Its rotation goes through two one-pole smoothers in series (30 ms by default, `driveSlewMs`, 0 turns it off), so the gain moves evenly in dB and starts and stops gently. The TRIM pot is a variable resistor in the netlist: it is stamped into the matrices at its last value, and a linear port carries the difference, so the circuit sees the exact resistance every sample without rebuilding the matrices each time. Moving the knob costs about nothing. `node tools/slew.js` measures the click from a jump: with no slew it is about 4 dB under the signal peak, with 30 ms it is 75–85 dB under.
+- **Auto level:** the output follows the Drive knob so loudness stays about the same as it is turned up. The curve was measured with `node tools/autolevel.js`: it is the K-weighted (BS.1770) loudness of the four bundled bass samples through the channel at each Drive step, in 0.05 steps, for the line input with 0 dBFS = +18 dBu. At Drive 0 the channel is unity at 1 kHz and clean. The real circuit still shows there: the EQ at its centre detents and the coupling caps are 0.4 dB down at 20 Hz with 10° of phase shift. Turn it off with `autoLevel: false`. The curve only holds for the line input and that calibration.
+- **Drive slew:** the Drive knob glides rather than steps. Its rotation goes through two one-pole smoothers in series (fixed at 30 ms; `driveSlewMs` in the core, 0 turns it off), so the gain moves evenly in dB and starts and stops gently. The TRIM pot is a variable resistor in the netlist: it is stamped into the matrices at its last value, and a linear port carries the difference, so the circuit sees the exact resistance every sample without rebuilding the matrices each time. Moving the knob costs about nothing. `node tools/slew.js` measures the click from a jump: with no slew it is about 4 dB under the signal peak, with 30 ms it is 75–85 dB under.
 
 Nothing is a waveshaper. Clipping, sticking on the rails, the asymmetry and the recovery all come from the circuit.
 
@@ -43,7 +44,7 @@ These values can't be read from the schematic. Each was given a standard value:
 
 | Item | Value used | Why |
 |---|---|---|
-| 0 dBFS calibration | +18 dBu at the jack (EBU R68), selectable on the page | The model works in volts, so a digital level has to map to a voltage. |
+| 0 dBFS calibration | +18 dBu at the jack (EBU R68) | The model works in volts, so a digital level has to map to a voltage. |
 | TRIM taper | dB-linear across the rotation | The manual lists "10KZY" but gives no curve. Mackie's trim is marked in dB. |
 | FREQ pot R121 taper | 500K reverse-log "C", 10% at mid | Standard C taper. |
 | 2SA1084 Is, Br, Vaf | 1e-13 A, 4, 100 V | There is no published SPICE model. **Sensitivity:** Is ×10 or ÷10, Vaf 50 V and Br 1 each move gain and harmonics by under 0.1 dB, both clean and clipping, because the servo loops set the operating point. |
@@ -76,12 +77,12 @@ The meter taps and everything after U103A are not modelled.
 - **Offline, higher quality:**
 
   ```
-  node tools/render.js in.wav out.wav <drive 0..1> [outputDb=-6] [oversample=4]
+  node tools/render.js in.wav out.wav <drive 0..1> [outputDb=0] [oversample=4]
   ```
 
   `renders/` holds the four test samples at drive 0.15, 0.3 and 0.6, rendered at 4× oversampling.
 
-- **Core API:** `new MackieChannel(sampleRate, { drive, input: 'line'|'mic', loCut, eqHigh, eqMid, eqLow, eqFreq, faderDb, outputDb, fullScaleVolts, oversample })`, then `process(input, output)`, `setParams({...})`, `readPeaks()` and `info()`.
+- **Core API:** `new MackieChannel(sampleRate, { drive, input: 'line'|'mic', loCut, eqHigh, eqMid, eqLow, eqFreq, faderDb, outputDb, fullScaleVolts, autoLevel, driveSlewMs, oversample })`, then `process(input, output)`, `setParams({...})`, `readPeaks()` and `info()`.
 
 ## Validating against a real desk
 

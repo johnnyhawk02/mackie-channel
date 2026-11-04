@@ -650,6 +650,17 @@
   // manual. Choice: the taper that makes the printed gain scale even, i.e.
   // preamp gain linear in dB with rotation from the pot's 10K end to its 0R end.
   const RFB = 5110, RG_MIN = 3.32;
+  // Auto level: channel loudness against Drive, K-weighted (BS.1770), averaged
+  // over the four bundled bass samples, line input, 0 dBFS = +18 dBu, in dB at
+  // Drive 0, 0.05 ... 1 (tools/autolevel.js). Shifted by +0.23 dB so Drive 0 is
+  // exactly unity at 1 kHz (-14.96 dB small-signal gain); the measured value
+  // there was 0.23 dB lower because of the coupling caps' low-end roll-off.
+  const AUTO_LEVEL_DB = [-15.19, -12.01, -8.83, -5.65, -2.46, 0.72, 3.9, 6.69, 8.62, 9.89, 10.72, 11.27,
+    11.67, 12, 12.28, 12.53, 12.75, 12.92, 13.08, 13.21, 13.32].map((v) => v + 0.23);
+  function autoLevelGain(rot) {
+    const x = Math.min(1, Math.max(0, rot)) * (AUTO_LEVEL_DB.length - 1), i = Math.min(AUTO_LEVEL_DB.length - 2, Math.floor(x)), t = x - i;
+    return Math.pow(10, -(AUTO_LEVEL_DB[i] + t * (AUTO_LEVEL_DB[i + 1] - AUTO_LEVEL_DB[i])) / 20);
+  }
   const DRIVE_TICK = 5e-3; // s between stage A rebuilds while Drive glides
   const GD_MIN = 1 + 2 * RFB / (10000 + RG_MIN), GD_MAX = 1 + 2 * RFB / RG_MIN;
   function trimResistance(rotation) {
@@ -712,6 +723,7 @@
     eqHigh: 0.5, eqMid: 0.5, eqLow: 0.5, eqFreq: 0.5, // pot rotations, 0.5 = centre detent
     faderDb: 0,            // 0 = "U" mark, max +10
     outputDb: 0,
+    autoLevel: true,       // output follows Drive so loudness stays about the same
   };
 
   class MackieChannel {
@@ -753,7 +765,8 @@
       const ampGain = 1 + 1100 / 510;
       P.faderRatio = p.faderDb <= -90 ? 0 : Math.min(1, Math.pow(10, p.faderDb / 20) / ampGain);
       this.inGain = p.fullScaleVolts;
-      this.outGain = Math.pow(10, p.outputDb / 20) / p.fullScaleVolts;
+      this.outGainBase = Math.pow(10, p.outputDb / 20) / p.fullScaleVolts;
+      this.outGain = this.outGainBase * (p.autoLevel ? autoLevelGain(this.driveNow) : 1);
     }
 
     _build(fresh) {
@@ -805,6 +818,7 @@
       const pad = this.p.input === 'mic' ? 1 : shunt / (5620 + shunt);
       return {
         trimOhms: rg - RG_MIN, gainLegOhms: rg, driveNow: this.driveNow,
+        autoLevelDb: this.p.autoLevel ? 20 * Math.log10(autoLevelGain(this.p.drive)) : 0,
         preGainDb: 20 * Math.log10(gd * 5110 / 10000),
         channelGainDb: 20 * Math.log10(pad * gd * 5110 / 10000),
         padDb: 20 * Math.log10(pad),
@@ -834,6 +848,7 @@
             if (Math.abs(target - d) < 1e-5 && Math.abs(target - m1) < 1e-5) { d = this.driveMid = target; gliding = false; }
             this.driveNow = d;
             this.P.trimOhms = trimResistance(d);
+            if (this.p.autoLevel) this.outGain = this.outGainBase * autoLevelGain(d);
             if (!gliding || ++this.slewCount >= this.slewTick) { this.slewCount = 0; A.setT(this.T); }
             else A.updateRV();
           }
