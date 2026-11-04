@@ -175,16 +175,16 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
     <section class="card">
       <details>
         <summary>What is modelled</summary>
+        <p>Every stage is a netlist of the parts on the schematic, solved sample by sample as a nonlinear circuit (nodal analysis with Newton iteration). Nothing is a waveshaper: clipping, rail sticking and recovery come out of the transistors and op-amps.</p>
         <ol>
-          <li><b>Line jack J68</b>: 5K62 series (R220/R212) into 1K50 shunt (R197/R168), a −13.5 dB pad, driven unbalanced so half the signal also arrives as common mode.</li>
-          <li><b>Preamp</b>: Q24/Q8 2SA1084 pair with NJM2068 feedback amps U17A/U25A. Gain is 1 + 2·5K11 / (trim + 3.32 Ω + C1). The 1000 µF C1 in the gain leg makes the gain fall back towards unity below a corner that rises to 48 Hz at full drive, so the bottom octave is driven less than the rest.</li>
-          <li><b>U33A</b> differential amp, gain 5K11/10K = 0.511.</li>
-          <li><b>Insert and main-board coupling</b> (C94/R167, C121/R137), which lets a lopsided clip settle around its own DC.</li>
-          <li><b>Lo cut</b> U104A, 3rd-order 75 Hz high pass, when switched in.</li>
-          <li><b>EQ stage</b> U101/U105 at flat, unity gain, NJM4560 swing.</li>
-          <li><b>Fader at U</b>, 10 dB down at the wiper of R107, then U103A making it back up with 1 + 1K1/510.</li>
+          <li><b>Line jack J68</b>: C142/C126, 5K62 series (R220/R212), 1K50 shunt (R197/R168) and the phantom feed resistors R523/R524, a −14.9 dB pad, driven unbalanced.</li>
+          <li><b>Preamp</b>: Q24/Q8 2SA1084 input pair (Ebers-Moll with Early effect), Q63/Q64/Q80 MMBT4403 current sources and reference, D80 1N4148 bias string, servo amps U17A/U25A, and the gain leg C1 1000 µF + trim + R1 3.32 Ω.</li>
+          <li><b>U33A</b> differential amp (R492/R425/R370/R482).</li>
+          <li><b>Main board coupling</b> C94/R167, C121/R137, and the <b>lo cut</b> U104A when switched in.</li>
+          <li><b>EQ</b>: the full mid (U101A/B with R120/R121 and C114/C115) and the hi/low Baxandall around U105A, set flat.</li>
+          <li><b>Fader at U</b>: R107 wiper into U103A, gain 1 + 1K1/510.</li>
         </ol>
-        <p>Every op-amp output bends into its rail (about ±14 V; the small +/− mismatch is an estimate). Clipping runs at 4× oversampling.</p>
+        <p>Op-amps are a macromodel built from datasheet figures: gain-bandwidth, open-loop gain, output swing and output resistance. Values that are not in the manual or a datasheet are stated as assumptions in the README: the 2SA1084 saturation current, the trim pot's taper, the op-amp output resistance, and 0 dBFS = +18 dBu. Parts whose effect is above 90 kHz (small compensation caps, L1) are left out. Live playback runs the circuit at the device sample rate.</p>
       </details>
     </section>
   </div>
@@ -212,7 +212,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
   /* ---------------- knob ---------------- */
   const A0 = -135, A1 = 135; // degrees
   const ticksG = $('ticks');
-  function gainAt(rot, input) { probe.setParams({ drive: rot, input }); probe._updatePreCoefs(true); return probe.info(); }
+  function gainAt(rot, input) { probe.setParams({ drive: rot, input }); return probe.info(); }
   function drawTicks() {
     const ns = 'http://www.w3.org/2000/svg'; ticksG.innerHTML = '';
     const lo = gainAt(0, state.input).channelGainDb, hi = gainAt(1, state.input).channelGainDb;
@@ -245,7 +245,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
     $('f-rg').textContent = i.gainLegOhms >= 1000 ? (i.gainLegOhms / 1000).toFixed(2) + ' kΩ' : i.gainLegOhms.toFixed(1) + ' Ω';
     $('f-pre').textContent = fmtDb(i.preGainDb);
     $('f-c1').textContent = i.c1CornerHz < 1 ? i.c1CornerHz.toFixed(2) + ' Hz' : i.c1CornerHz.toFixed(1) + ' Hz';
-    $('f-pad').textContent = state.input === 'mic' ? '0.0 dB' : '−13.5 dB';
+    $('f-pad').textContent = fmtDb(i.padDb);
   }
   function setDrive(v) { state.drive = Math.min(1, Math.max(0, v)); renderKnob(); push(); }
   const knob = $('knob'); let drag = null;
@@ -283,22 +283,21 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
   const workletSource = () => `
     const { MackieChannel } = (${Core.factory.toString()})();
     class MackieChannelProcessor extends AudioWorkletProcessor {
-      constructor() { super(); this.ch = []; this.params = {}; this.bypass = false; this.n = 0;
+      constructor() { super(); this.ch = null; this.params = {}; this.bypass = false; this.n = 0;
         this.port.onmessage = (e) => { const d = e.data;
-          if (d.params) { this.params = d.params; this.ch.forEach((c) => c.setParams(d.params)); }
+          if (d.params) { this.params = d.params; if (this.ch) this.ch.setParams(d.params); }
           if ('bypass' in d) this.bypass = d.bypass; }; }
       process(inputs, outputs) {
-        const inp = inputs[0], out = outputs[0];
-        for (let c = 0; c < out.length; c++) {
-          const x = inp[c] || inp[0];
-          if (!x) { out[c].fill(0); continue; }
-          if (!this.ch[c]) this.ch[c] = new MackieChannel(sampleRate, this.params);
-          if (this.bypass) { out[c].set(x); this.ch[c].process(x, new Float32Array(x.length)); }
-          else this.ch[c].process(x, out[c]);
-        }
-        if (++this.n >= 4 && this.ch[0]) { this.n = 0;
-          const p = this.ch[0].readPeaks(); if (this.ch[1]) { const q = this.ch[1].readPeaks(); for (const k in p) p[k] = Math.max(p[k], q[k]); }
-          this.port.postMessage({ peaks: p }); }
+        // one channel strip is mono: sum the input, run one circuit, copy to every output
+        const inp = inputs[0], out = outputs[0], n = out[0].length;
+        if (!this.x || this.x.length !== n) { this.x = new Float32Array(n); this.y = new Float32Array(n); }
+        const x = this.x; x.fill(0);
+        for (const c of inp) for (let i = 0; i < n; i++) x[i] += c[i] / inp.length;
+        if (!this.ch) this.ch = new MackieChannel(sampleRate, this.params);
+        this.ch.process(x, this.y);
+        const y = this.bypass ? x : this.y;
+        for (const o of out) o.set(y);
+        if (++this.n >= 4) { this.n = 0; this.port.postMessage({ peaks: this.ch.readPeaks() }); }
         return true;
       }
     }
@@ -314,12 +313,14 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
       port = node.port; port.onmessage = (e) => { if (e.data.peaks) latestPeaks = e.data.peaks; };
     } catch (err) {
       // fallback: ScriptProcessor on the main thread, same core
-      node = ctx.createScriptProcessor(1024, 2, 2); spModels = [0, 1].map(() => new Core.MackieChannel(ctx.sampleRate, params()));
-      const scratch = new Float32Array(1024);
+      node = ctx.createScriptProcessor(1024, 2, 2); spModels = [new Core.MackieChannel(ctx.sampleRate, params())];
+      const xm = new Float32Array(1024), ym = new Float32Array(1024);
       node.onaudioprocess = (e) => {
-        for (let c = 0; c < 2; c++) { const x = e.inputBuffer.getChannelData(Math.min(c, e.inputBuffer.numberOfChannels - 1)), y = e.outputBuffer.getChannelData(c);
-          if (state.bypass) { y.set(x); spModels[c].process(x, scratch); } else spModels[c].process(x, y); }
-        const p = spModels[0].readPeaks(), q = spModels[1].readPeaks(); for (const k in p) p[k] = Math.max(p[k], q[k]); latestPeaks = p;
+        const ib = e.inputBuffer, ob = e.outputBuffer; xm.fill(0);
+        for (let c = 0; c < ib.numberOfChannels; c++) { const d = ib.getChannelData(c); for (let i = 0; i < 1024; i++) xm[i] += d[i] / ib.numberOfChannels; }
+        spModels[0].process(xm, ym);
+        for (let c = 0; c < ob.numberOfChannels; c++) ob.getChannelData(c).set(state.bypass ? xm : ym);
+        latestPeaks = spModels[0].readPeaks();
       };
     }
     node.connect(anOut); anOut.connect(ctx.destination);
@@ -361,10 +362,10 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
 
   /* ---------------- meters + scope ---------------- */
   const STAGES = [
-    ['pre', 'Preamp', 'U17A / U25A · NJM2068', Core.RAILS.NJM2068],
-    ['diff', 'Diff amp', 'U33A · NJM2068', Core.RAILS.NJM2068],
-    ['eq', 'EQ stage', 'U101B · NJM4560', Core.RAILS.NJM4560],
-    ['fader', 'Fader amp', 'U103A · NJM4560', Core.RAILS.NJM4560],
+    ['pre', 'Preamp', 'U17A / U25A · NJM2068', Core.LIMITS.pre],
+    ['diff', 'Diff amp', 'U33A · NJM2068', Core.LIMITS.diff],
+    ['eq', 'EQ stage', 'U101B · NJM4560', Core.LIMITS.eq],
+    ['fader', 'Fader amp', 'U103A · NJM4560', Core.LIMITS.fader],
   ];
   const meters = $('meters'), held = {}; let lastT = performance.now(), olUntil = 0;
   STAGES.forEach(([k, name, part]) => {

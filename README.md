@@ -1,64 +1,92 @@
-# CR1604-VLZ channel drive model
+# Mackie CR1604-VLZ channel, component-level model
 
-A component-level JavaScript model of one input channel of a Mackie CR1604-VLZ,
-built from the service manual schematics (pod board 219 rev B and main board
-220 rev A, channel 1), with a single Drive control (the channel TRIM pot).
+A circuit simulation of one input channel of a Mackie CR1604-VLZ, used as an overdrive. The interface is one **Drive** knob, which is the channel's TRIM pot. Everything was read from the CR1604-VLZ service manual: pod board 219 (mic/line preamp) and main board 220 (EQ, fader).
 
-**Try it:** https://johnnyhawk02.github.io/mackie-channel/ (load one of the bundled bass samples and turn Drive).
+**Try it:** https://johnnyhawk02.github.io/mackie-channel/
 
-## Files
+## How it works
 
-- `mackie-channel-core.js`: the DSP. Pure JS, no Web Audio or DOM. Works as a
-  browser global (`MackieChannelCore`), a CommonJS module in Node, and inside an
-  AudioWorklet (the page builds the worklet from this same file). This is the
-  file to port to C++ for a plugin.
-- `index.html`: test page. Drive knob, line/mic jack, lo cut, output trim,
-  input calibration, per-op-amp headroom meters and a scope.
-- `samples/`: the four bass samples, loadable from the page.
-- `renders/`: the samples processed offline at drive 0.3 and 0.6, output -6 dB.
-- `tools/render.js`: offline render, `node tools/render.js in.wav out.wav <drive 0..1> [outputDb]`.
-- `tools/test.js`: gain law and sine THD check.
+Each stage is a netlist of the real parts, solved every sample as a nonlinear circuit:
 
-## Using the core
+- **Solver:** nodal analysis reduced to the K-method (DK) form, with trapezoidal companion models and backward Euler for the stiff parts. Newton iteration uses junction limiting (SPICE `pnjlim`) and a monotonicity-damped step. If Newton does not converge it falls back to sub-stepping.
+- **Transistors:** Ebers-Moll transport model with Early effect.
+- **Diodes:** Shockley.
+- **Op-amps:** a macromodel. It has an input transconductance into a compensation integrator, set by GBW and A0, a smooth output-swing limit at the datasheet headroom, and the output resistance.
+- **Operating point:** found by ramping the ±16 V supplies up from zero, like powering on the desk.
 
-```js
-const { MackieChannel } = require('./mackie-channel-core.js'); // or window.MackieChannelCore
-const ch = new MackieChannel(48000, { drive: 0.4 });  // one instance per audio channel
-ch.setParams({ drive: 0.6, input: 'line', loCut: false, outputDb: -6 });
-ch.process(inputFloat32, outputFloat32);             // digital full scale in and out
-ch.readPeaks();  // peak volts at each op-amp since the last call
-ch.info();       // trim ohms, preamp gain, C1 corner, latency
-```
+Nothing is a waveshaper. Clipping, sticking on the rails, the asymmetry and the recovery all come from the circuit.
 
-Parameters: `drive` (0..1 trim rotation), `input` ('line' | 'mic'),
-`fullScaleVolts` (peak volts at the jack for 0 dBFS, default 8.68 V = +18 dBu),
-`loCut`, `eqLow`/`eqMid`/`eqMidFreq`/`eqHigh` (dB, Hz), `faderDb` (0 = U, max +10),
-`outputDb`.
+The DSP core (`mackie-channel-core.js`) has no UI or Web Audio code in it, so it can be ported to a plugin later.
 
-## Circuit summary
+| Stage | Parts modelled |
+|---|---|
+| Line jack J68 | C142/C126 47µ, R220/R212 5K62, R197/R168 1K50, phantom feed R523/R524 6K81 via C349/C350 |
+| Preamp | Q24/Q8 2SA1084 input pair; Q64/Q80 MMBT4403 current sources (R427/R428, R324/R284, C383/C384); bias string R483, D80 1N4148, R484; reference Q63, R426, R267; collector loads R371/R372; servo amps U17A/U25A NJM2068 with R268/R323 5K11; gain leg C1 1000µ + TRIM + R1 3.32 Ω |
+| Diff amp | U33A NJM2068, R492/R425 10K, R370/R482 5K11 |
+| Main board coupling | C94/R167, C121/R137 |
+| Lo cut | C104–C106, R103–R105, U104A, C107/R106 |
+| EQ | Mid: U101A/B, R120 MID pot, R121 FREQ pot, C114, C115, R122–R123, R133–R136. Hi/Low Baxandall: U105A, R117–R119, R124–R127, C108–C111 |
+| Fader | C120, R107 fader, C113/R131, U103A with R101/R102 |
 
-| Stage | Parts | Model |
+### Checked against the manual and spec
+
+- **DC bias:** emitters at 0.60 V, collectors at the reference (−12.70 V, Ic ≈ 1.33 mA).
+- **Clean gain:** within 0.33 dB of theory at every drive setting, line and mic.
+- **EQ:** matches the published spec. Hi ±15 dB at 12 kHz, Low ±15 dB at 80 Hz, Mid ±15 dB sweeping 100 Hz–8 kHz, and Lo cut 18 dB/oct at 75 Hz.
+- **Low-level distortion:** falls with signal level, as a real circuit's does (h2 about 3e-9 at 10 mV).
+
+## What is not from the parts list
+
+These values can't be read from the schematic. Each was given a standard value:
+
+| Item | Value used | Why |
 |---|---|---|
-| Line jack J68 | R220/R212 5K62, R197/R168 1K50 | −13.5 dB pad, unbalanced (half the signal is common mode) |
-| Preamp | Q24/Q8 2SA1084, U17A/U25A NJM2068, R268/R323 5K11, trim R162 10K + R1 3R32 + C1 1000 µF | Gd = 1 + 2·5K11 / (Rtrim + 3.32 + 1/sC1), each op-amp output clipped |
-| Diff amp | U33A NJM2068, R482/R492 | ×0.511, clipped |
-| Coupling | C94/R167, C121/R137 | 0.34 Hz and 0.17 Hz high passes |
-| Lo cut | U104A NJM4560 | 75 Hz 3rd-order Butterworth, clipped |
-| EQ | U101A/B, U105A NJM4560 | behavioural shelves/peak, flat by default, clipped |
-| Fader | R107 10K, U103A NJM4560, R101 1K1 / R102 510 | U = −10 dB at wiper, +10 dB make-up, clipped |
+| 0 dBFS calibration | +18 dBu at the jack (EBU R68), selectable on the page | The model works in volts, so a digital level has to map to a voltage. |
+| TRIM taper | dB-linear across the rotation | The manual lists "10KZY" but gives no curve. Mackie's trim is marked in dB. |
+| FREQ pot R121 taper | 500K reverse-log "C", 10% at mid | Standard C taper. |
+| 2SA1084 Is, Br, Vaf | 1e-13 A, 4, 100 V | There is no published SPICE model. **Sensitivity:** Is ×10 or ÷10, Vaf 50 V and Br 1 each move gain and harmonics by under 0.1 dB, both clean and clipping, because the servo loops set the operating point. |
+| Op-amp Rout | 50 Ω | A typical value. It sits inside feedback loops. |
+| Phantom power | Off; the phantom bus is treated as ground | It is the normal state for a line input. |
 
-Gain range on the line input is −13.2 dB to +50.4 dB, mic 0 to +64 dB, in line
-with Mackie's published spec. At full drive the C1 corner rises to 48 Hz, so
-the lowest octave of a bass is pushed less hard than the rest.
+Device data:
 
-## Known approximations
+- NJM2068: GBW 27 MHz and SR 6 V/µs (Nisshinbo). A0 110 dB and 1.5 V swing headroom are datasheet typicals.
+- NJM4560: GBW 10 MHz, A0 100 dB, 1.0 V headroom (datasheet typicals).
+- MMBT4403 and 1N4148: standard published SPICE models.
 
-- Op-amp rails (about ±14.4 V on ±16 V supplies) and their +/− mismatch are
-  estimated from datasheet typicals, not measured.
-- When U17A/U25A clip, the real feedback loop opens and the input pair can
-  misbehave briefly; the model clips each output cleanly instead.
-- The trim taper is set to be dB-linear across rotation. The real "10KZY" pot
-  curve is not in the manual.
-- EQ is fitted to the published curves rather than solved from U101/U105.
-- Slew rate and op-amp bandwidth are ignored (they matter above the audio band
-  at these levels).
+## Left out
+
+These parts only matter above about 90 kHz:
+
+- C110/C79/C367 470p
+- C315/C316 1n
+- the small compensation caps C158/C182, C214/C237, C123, C112, C103
+
+L1 (4.7 µH) is also left out: −0.13 dB at 20 kHz at full gain.
+
+The op-amp slew rate is not modelled. At these levels it never limits within one sample.
+
+The meter taps and everything after U103A are not modelled.
+
+## Running
+
+- **Browser:** open `index.html` (any static server). Live playback runs the circuit at the audio device's sample rate, mono, in an AudioWorklet. The load is typically 0.2–0.5× real time on one core, and about 1× at full drive with heavy clipping.
+- **Offline, higher quality:**
+
+  ```
+  node tools/render.js in.wav out.wav <drive 0..1> [outputDb=-6] [oversample=4]
+  ```
+
+  `renders/` holds the four test samples at drive 0.15, 0.3 and 0.6, rendered at 4× oversampling.
+
+- **Core API:** `new MackieChannel(sampleRate, { drive, input: 'line'|'mic', loCut, eqHigh, eqMid, eqLow, eqFreq, faderDb, outputDb, fullScaleVolts, oversample })`, then `process(input, output)`, `setParams({...})`, `readPeaks()` and `info()`.
+
+## Validating against a real desk
+
+To validate against a real desk:
+
+1. Play a 1 kHz sine at a known dBu into the line input, with the trim at several marked positions.
+2. Record the main or direct out.
+3. Compare the gain and the h2/h3 levels with `tools/test.js`.
+
+If the trim marks disagree, the trim taper is the first thing to adjust (`trimResistance` in the core).

@@ -1,12 +1,16 @@
-// node tools/render.js <in.wav> <out.wav> <drive 0..1> [outputDb]
+// Offline render through the circuit model (mono, as a single channel strip is mono).
+// node tools/render.js <in.wav> <out.wav> <drive 0..1> [outputDb] [oversample]
 const { MackieChannel } = require('../mackie-channel-core.js');
 const { readWav, writeWav } = require('./wav.js');
-const [,, inp, out, drive, outDb] = process.argv;
-const w = readWav(inp); const t0 = Date.now(); const peaks = [];
-const outs = w.chans.map(ch => { const m = new MackieChannel(w.sr, { drive: +drive, outputDb: outDb !== undefined ? +outDb : 0 });
-  const tail = Math.ceil(m.info().latencySamples); const x = new Float32Array(ch.length + tail); x.set(ch);
-  const y = m.process(x, new Float32Array(x.length)).subarray(tail); peaks.push(m.readPeaks()); return y; });
-writeWav(out, w.sr, outs);
-const pk = a => 20 * Math.log10(a.reduce((m, v) => Math.max(m, Math.abs(v)), 0));
-const rms = a => 10 * Math.log10(a.reduce((s, v) => s + v * v, 0) / a.length);
-console.log(`${out}: in pk ${pk(w.chans[0]).toFixed(1)} rms ${rms(w.chans[0]).toFixed(1)} | out pk ${pk(outs[0]).toFixed(1)} rms ${rms(outs[0]).toFixed(1)} dBFS | stage peaks V ${JSON.stringify(peaks[0], (k, v) => typeof v === 'number' ? +v.toFixed(2) : v)} | ${((Date.now() - t0) / 1000 / (w.chans[0].length / w.sr)).toFixed(3)}x RT`);
+const [,, inp, out, drive, outDb = '-6', os = '4'] = process.argv;
+const w = readWav(inp);
+const n = w.chans[0].length, x = new Float32Array(n);
+for (let i = 0; i < n; i++) { let s = 0; for (const c of w.chans) s += c[i]; x[i] = s / w.chans.length; }
+const m = new MackieChannel(w.sr, { drive: +drive, outputDb: +outDb, oversample: +os });
+const tail = Math.ceil(m.info().latencySamples), xx = new Float32Array(n + tail); xx.set(x);
+const t0 = Date.now(); const y = m.process(xx, new Float32Array(n + tail)).subarray(tail); const pk = m.readPeaks();
+writeWav(out, w.sr, [y]);
+const db = (a) => (20 * Math.log10(a)).toFixed(1);
+let p = 0, r = 0, bad = 0; for (const v of y) { if (!isFinite(v)) bad++; p = Math.max(p, Math.abs(v)); r += v * v; }
+const inf = m.info();
+console.log(`${out}: out peak ${db(p)} dBFS rms ${db(Math.sqrt(r / n))} | stage peaks V pre ${pk.pre.toFixed(1)} diff ${pk.diff.toFixed(1)} eq ${pk.eq.toFixed(1)} fader ${pk.fader.toFixed(1)} | ${((Date.now() - t0) / 1000 / (n / w.sr)).toFixed(2)}x RT, ${inf.avgIterations.toFixed(2)} it, ${inf.substeps} substeps, ${inf.unconverged} unconverged, ${bad} bad`);
