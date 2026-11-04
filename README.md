@@ -4,7 +4,7 @@ A component-level JavaScript model of one input channel of a Mackie CR1604-VLZ,
 built from the service manual schematics (pod board 219 rev B and main board
 220 rev A, channel 1), with a single Drive control (the channel TRIM pot).
 
-**Try it:** https://johnnyhawk02.github.io/mackie-channel/
+**Try it:** https://johnnyhawk02.github.io/mackie-channel/ (load one of the bundled bass samples and turn Drive).
 
 ## Files
 
