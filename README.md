@@ -93,3 +93,10 @@ To validate against a real desk:
 3. Compare the gain and the h2/h3 levels with `tools/test.js`.
 
 If the trim marks disagree, the trim taper is the first thing to adjust (`trimResistance` in the core).
+
+## Icon
+
+`icons/icon.svg` is the master (a graphite tile with a Drive knob turned up and its orange glow arc).
+`icons/` also holds the exported sizes: PWA icons (192, 512, maskable 512), `apple-touch-icon.png` (180),
+`favicon.ico` (16/32/48), `icon-1024.png` and `icon.icns` for a macOS plugin bundle or installer.
+`manifest.webmanifest` makes the page installable as an app.
