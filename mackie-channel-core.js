@@ -5,6 +5,8 @@
  * node by node from the service-manual schematics (pod board 219 rev B, ch 1,
  * and main board 220 rev A, ch 1). No Web Audio, no DOM: it runs in an
  * AudioWorklet, a ScriptProcessor, or Node, and ports line for line to C++.
+ * Its C++ twin is plugin/Source/MackieChannelCore.cpp (the VST3): change the
+ * two together and rerun plugin/tools/nulltest.sh.
  *
  * How it works
  * ------------

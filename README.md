@@ -19,7 +19,7 @@ Each stage is a netlist of the real parts, solved every sample as a nonlinear ci
 
 Nothing is a waveshaper. Clipping, sticking on the rails, the asymmetry and the recovery all come from the circuit.
 
-The DSP core (`mackie-channel-core.js`) has no UI or Web Audio code in it, so it can be ported to a plugin later.
+The DSP core (`mackie-channel-core.js`) has no UI or Web Audio code in it. Its VST3 port is in `plugin/` (see `plugin/README.md`), and the port nulls bit for bit against it.
 
 | Stage | Parts modelled |
 |---|---|
@@ -82,6 +82,7 @@ The meter taps and everything after U103A are not modelled.
 
   `renders/` holds the four test samples at drive 0.15, 0.3 and 0.6, rendered at 4× oversampling.
 
+- **VST3:** `VLZ Channel Drive`, built from `plugin/` and installed to `~/Library/Audio/Plug-Ins/VST3/Johnny/`. It has one Drive knob and runs at 4× oversampling. See `plugin/README.md`.
 - **Core API:** `new MackieChannel(sampleRate, { drive, input: 'line'|'mic', loCut, eqHigh, eqMid, eqLow, eqFreq, faderDb, outputDb, fullScaleVolts, autoLevel, driveSlewMs, oversample })`, then `process(input, output)`, `setParams({...})`, `readPeaks()` and `info()`.
 
 ## Validating against a real desk
