@@ -127,7 +127,7 @@ If the trim marks disagree, the trim taper is the first thing to adjust (`trimRe
 | Fuzz Face | two AC128 germanium PNPs, 9 V positive ground, 100K DC feedback, 1K FUZZ pot with its 20 µF cap, fed from a passive pickup through a 250K volume pot | the FUZZ pot and the guitar volume together |
 | Tweed Champ (Fender 5F1 preamp) | two 12AX7 stages (Koren triode model with grid current) on 250 V, the 1M VOLUME pot between them, into the 6V6 grid with its grid-current clamp | the VOLUME pot |
 
-The core is `colour-circuits-core.js`. Its solver is a copy of the Mackie core's with a triode added. The VST3 (Colourbox) has them too, picked with its Circuit row; see `plugin/README.md`. 0 dBFS is 1 V peak at the circuit's input. Assumed device values (germanium Is, 2SC1815 Is, grid conduction, pickup resistance) are marked ASSUMED in the source. The 6V6 power stage and output transformer are not modelled.
+The core is `colour-circuits-core.js`. Its solver is a copy of the Mackie core's with a triode added. The VST3 (Colourbox) has them too, picked with its Circuit row; see `plugin/README.md`. `quality: 'lite'` (the plugin's Lite) swaps each circuit for a formula version at 4x: a few filters from the parts and a smooth clipper, with gains and clip levels taken from the full model and its own auto-level table. It costs about a tenth of the CPU. 0 dBFS is 1 V peak at the circuit's input. Assumed device values (germanium Is, 2SC1815 Is, grid conduction, pickup resistance) are marked ASSUMED in the source. The 6V6 power stage and output transformer are not modelled.
 
 ```
 node tools/colour-render.js <ts808|fuzz|tweed> in.wav out.wav <drive 0..1> [oversample=4]

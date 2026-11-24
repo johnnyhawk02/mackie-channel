@@ -43,6 +43,7 @@ struct CircuitDef
     void (*setDrive) (ColourCircuit::Values&, double);
     std::shared_ptr<Netlist> (*build) (PV);
     std::array<double, 21> autoLevelDb;
+    std::array<double, 21> autoLevelDbLite;
 };
 
 static std::shared_ptr<Netlist> buildTs808 (PV P)
@@ -118,18 +119,21 @@ static const CircuitDef& circuitDef (int model)
 {
     static const CircuitDef defs[3] = {
         { 1.0, { 9 }, [] (ColourCircuit::Values& P, double d) { P.drive = 500e3 * aTaper (d); }, buildTs808,
-          { -0.98, -0.95, -0.93, -0.89, -0.85, -0.81, -0.76, -0.7, -0.64, -0.57, -0.5, -0.43, -0.36, -0.29, -0.22, -0.16, -0.11, -0.06, -0.01, 0.02, 0.06 } },
+          { -0.98, -0.95, -0.93, -0.89, -0.85, -0.81, -0.76, -0.7, -0.64, -0.57, -0.5, -0.43, -0.36, -0.29, -0.22, -0.16, -0.11, -0.06, -0.01, 0.02, 0.06 },
+          { -0.8, -0.77, -0.74, -0.7, -0.66, -0.61, -0.55, -0.48, -0.4, -0.32, -0.22, -0.12, -0.02, 0.09, 0.19, 0.29, 0.39, 0.49, 0.57, 0.65, 0.72 } },
         { 1.0, { -9 }, [] (ColourCircuit::Values& P, double d) { P.fuzz = 1 - jsmath::pow (1 - d, 3); P.gvol = aTaper (0.7 + 0.3 * d); }, buildFuzz,
-          { -13.9, -12.92, -11.59, -10.38, -9.35, -8.49, -7.75, -7.12, -6.58, -6.12, -5.71, -5.34, -5, -4.68, -4.39, -4.16, -3.98, -3.87, -3.82, -3.87, -4.06 } },
+          { -13.9, -12.92, -11.59, -10.38, -9.35, -8.49, -7.75, -7.12, -6.58, -6.12, -5.71, -5.34, -5, -4.68, -4.39, -4.16, -3.98, -3.87, -3.82, -3.87, -4.06 },
+          { -14.46, -13.16, -11.89, -10.69, -9.59, -8.61, -7.76, -7.03, -6.41, -5.88, -5.43, -5.03, -4.68, -4.36, -4.08, -3.85, -3.67, -3.53, -3.42, -3.33, -3.22 } },
         { 1.0, { 250, 20 }, [] (ColourCircuit::Values& P, double d) { P.vol = aTaper (0.2 + 0.8 * d); }, buildTweed,
-          { 26.99, 29.23, 31.15, 32.88, 34.46, 35.86, 37.05, 38.02, 38.79, 39.42, 39.94, 40.37, 40.75, 41.08, 41.38, 41.66, 41.93, 42.22, 42.54, 42.95, 43.62 } },
+          { 26.99, 29.23, 31.15, 32.88, 34.46, 35.86, 37.05, 38.02, 38.79, 39.42, 39.94, 40.37, 40.75, 41.08, 41.38, 41.66, 41.93, 42.22, 42.54, 42.95, 43.62 },
+          { 26.34, 28.57, 30.54, 32.31, 33.97, 35.53, 37.02, 38.42, 39.69, 40.79, 41.72, 42.48, 43.09, 43.58, 43.98, 44.31, 44.58, 44.81, 45, 45.36, 45.58 } },
     };
     return defs[std::min (2, std::max (0, model))];
 }
 
-static double autoLevelGain (int model, double rot)
+static double autoLevelGain (int model, bool lite, double rot)
 {
-    const auto& t = circuitDef (model).autoLevelDb; const int len = (int) t.size();
+    const auto& t = lite ? circuitDef (model).autoLevelDbLite : circuitDef (model).autoLevelDb; const int len = (int) t.size();
     const double x = std::min (1.0, std::max (0.0, rot)) * (len - 1);
     const int i = std::min (len - 2, (int) std::floor (x)); const double f = x - i;
     return jsmath::pow (10.0, -(t[i] + f * (t[i + 1] - t[i])) / 20);
@@ -138,10 +142,28 @@ static double autoLevelGain (int model, double rot)
 static constexpr double DRIVE_TICK = 5e-3;
 
 // ============================================================================
+// Lite (see the JS): a few filters and a smooth clipper per circuit, at 4x
+// ============================================================================
+static constexpr double PI_ = 3.141592653589793;
+static double tanhE (double u) { return u > 20 ? 1 : u < -20 ? -1 : 1 - 2 / (jsmath::exp (2 * u) + 1); }
+static double sclip (double u, double lo, double hi) { return u > 0 ? hi * tanhE (u / hi) : lo * tanhE (u / lo); }
+static double hclip (double u, double lo, double hi) { const double r = u / (u > 0 ? hi : lo), r2 = r * r; return u / jsmath::pow (1 + r2 * r2, 0.25); }
+static double pole (double fc, double T) { return jsmath::exp (-2 * PI_ * fc * T); }
+static const double FUZZ_LITE_GAIN_DB[21] = { -12.94, -11.42, -9.81, -8.11, -6.3, -4.37, -2.31, -0.1, 2.28, 4.85, 7.62, 10.62, 13.85, 17.32, 20.97, 24.69, 28.33, 31.75, 35.09, 38.65, 45.17 };
+static double tableAt (const double* t, int len, double rot)
+{
+    const double x = std::min (1.0, std::max (0.0, rot)) * (len - 1);
+    const int i = std::min (len - 2, (int) std::floor (x)); const double f = x - i;
+    return t[i] + f * (t[i + 1] - t[i]);
+}
+static const double TS_LITE_TRIM = jsmath::pow (10.0, -2.2 / 20);
+static constexpr double TWEED_A1 = 55, TWEED_A2 = 26, TWEED_BEND = 0.1, TWEED_BEND2 = 0.03;
+
+// ============================================================================
 // ColourCircuit
 // ============================================================================
 ColourCircuit::ColourCircuit (double sampleRate, const Settings& s)
-    : fs (sampleRate), os (s.oversample > 0 ? s.oversample : 1), T (1 / (sampleRate * os)), ovs (os), p (s)
+    : fs (sampleRate), os (s.lite ? 4 : s.oversample > 0 ? s.oversample : 1), T (1 / (sampleRate * os)), ovs (os), p (s), lite (s.lite)
 {
     osBuf.assign (os, 0.0);
     // _build
@@ -149,6 +171,15 @@ ColourCircuit::ColourCircuit (double sampleRate, const Settings& s)
     P = std::make_shared<Values>();
     driveNow = driveMid = p.drive;
     def.setDrive (*P, driveNow);
+    fullScale = def.fullScaleVolts;
+    if (lite)
+    {
+        // liteInit
+        L.in = pole (15.6, T); L.hp = pole (720, T); L.tone = pole (723, T); L.miller = pole (14000, T);
+        L.out = pole (p.model == Tweed ? 33 : p.model == Fuzz ? 32 : 1.6, T);
+        liteDrive();
+        slewCount = 0; derive(); return;
+    }
     cir = std::make_unique<Circuit> (def.build (P), T);
     u.assign (1 + def.supplies.size(), 0.0);
     for (size_t k = 0; k < def.supplies.size(); k++) u[k + 1] = def.supplies[k];
@@ -156,8 +187,13 @@ ColourCircuit::ColourCircuit (double sampleRate, const Settings& s)
     ixOut = cir->outIndex ("out"); ixClip = cir->outIndex ("clip");
     dc = cir->y[(size_t) ixOut];
     slewCount = 0;
-    fullScale = def.fullScaleVolts;
     derive();
+}
+
+void ColourCircuit::liteDrive()
+{
+    if (p.model == TS808) L.fb = pole (1 / (2 * PI_ * (51e3 + P->drive) * 51e-12), T);
+    if (p.model == Fuzz) L.g = jsmath::pow (10.0, tableAt (FUZZ_LITE_GAIN_DB, 21, driveNow) / 20);
 }
 
 void ColourCircuit::derive()
@@ -167,7 +203,7 @@ void ColourCircuit::derive()
     slewTick = std::max (1, (int) std::floor (DRIVE_TICK / T + 0.5));
     inGain = fullScale;
     outGainBase = jsmath::pow (10.0, p.outputDb / 20) / fullScale;
-    outGain = outGainBase * (p.autoLevel ? autoLevelGain (p.model, driveNow) : 1);
+    outGain = outGainBase * (p.autoLevel ? autoLevelGain (p.model, lite, driveNow) : 1);
 }
 
 void ColourCircuit::setParams (const Settings& s)
@@ -176,8 +212,60 @@ void ColourCircuit::setParams (const Settings& s)
     derive();
 }
 
+void ColourCircuit::processLite (const float* input, float* output, int n)
+{
+    const double target = p.drive; double* st = L.s; const Values& Pv = *P;
+    bool gliding = driveNow != target;
+    for (int s = 0; s < n; s++)
+    {
+        const double* up = ovs.up ((double) input[s] * inGain);
+        for (int k = 0; k < os; k++)
+        {
+            if (gliding)
+            {
+                const double a = slewA, m1 = driveMid += (target - driveMid) * a;
+                double d = driveNow + (m1 - driveNow) * a;
+                if (std::abs (target - d) < 1e-5 && std::abs (target - m1) < 1e-5) { d = driveMid = target; gliding = false; }
+                driveNow = d;
+                circuitDef (p.model).setDrive (*P, d); liteDrive();
+                if (p.autoLevel) outGain = outGainBase * autoLevelGain (p.model, lite, d);
+            }
+            // liteStep
+            const double x = up[k]; double y;
+            if (p.model == TS808)
+            {
+                const double x1 = x - (st[0] = st[0] + (1 - L.in) * (x - st[0]));
+                const double xh = x1 - (st[1] = st[1] + (1 - L.hp) * (x1 - st[1]));
+                const double g = (51e3 + Pv.drive) / 4.7e3;
+                const double v = (st[2] = st[2] + (1 - L.fb) * (g * xh - st[2]));
+                const double o1 = x1 + sclip (v, 0.42, 0.40);
+                const double t = (st[3] = st[3] + (1 - L.tone) * (o1 - st[3]));
+                y = t * TS_LITE_TRIM;
+            }
+            else if (p.model == Fuzz)
+            {
+                const double x1 = x - (st[0] = st[0] + (1 - L.in) * (x - st[0]));
+                const double yy = hclip (L.g * x1, 0.28, 0.20);
+                y = yy - (st[1] = st[1] + (1 - L.out) * (yy - st[1]));
+            }
+            else
+            {
+                const double x1 = (st[0] = st[0] + (1 - L.miller) * (x - st[0]));
+                const double y1 = -TWEED_A1 * hclip (x1 + TWEED_BEND * x1 * x1, 1.8, 1.0);
+                const double v2 = Pv.vol * y1;
+                const double y2 = -TWEED_A2 * hclip (v2 + TWEED_BEND2 * v2 * v2, 3.0, 5.0);
+                const double y3 = y2 > 0 ? 25 * tanhE (y2 / 25) : y2;
+                y = y3 - (st[1] = st[1] + (1 - L.out) * (y3 - st[1]));
+            }
+            osBuf[(size_t) k] = y;
+        }
+        output[s] = (float) (ovs.down (osBuf.data(), os) * outGain);
+    }
+}
+
 void ColourCircuit::process (const float* input, float* output, int n)
 {
+    if (lite) { processLite (input, output, n); return; }
     Circuit& C = *cir;
     const double target = p.drive;
     bool gliding = driveNow != target;
@@ -193,7 +281,7 @@ void ColourCircuit::process (const float* input, float* output, int n)
                 if (std::abs (target - d) < 1e-5 && std::abs (target - m1) < 1e-5) { d = driveMid = target; gliding = false; }
                 driveNow = d;
                 circuitDef (p.model).setDrive (*P, d);
-                if (p.autoLevel) outGain = outGainBase * autoLevelGain (p.model, d);
+                if (p.autoLevel) outGain = outGainBase * autoLevelGain (p.model, lite, d);
                 if (! gliding || ++slewCount >= slewTick) { slewCount = 0; C.setT (T); }
                 else C.updateRV();
             }

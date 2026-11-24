@@ -685,11 +685,14 @@
 
   // Auto level: loudness of each circuit against Drive (K-weighted, the four
   // bundled bass samples), dB at Drive 0, 0.05 ... 1, measured by
-  // tools/colour-autolevel.js. The output is scaled by the inverse, so the
+  // tools/colour-autolevel.js (QUALITY=lite for the Lite tables). The output is scaled by the inverse, so the
   // loudness stays where the dry signal was.
   const AUTO_LEVEL_DB = {
     ts808: [-0.98,  -0.95,  -0.93,  -0.89,  -0.85,  -0.81,  -0.76,  -0.7,  -0.64,  -0.57,  -0.5,  -0.43,  -0.36,  -0.29,  -0.22,  -0.16,  -0.11,  -0.06,  -0.01,  0.02,  0.06],
     fuzz: [-13.9,  -12.92,  -11.59,  -10.38,  -9.35,  -8.49,  -7.75,  -7.12,  -6.58,  -6.12,  -5.71,  -5.34,  -5,  -4.68,  -4.39,  -4.16,  -3.98,  -3.87,  -3.82,  -3.87,  -4.06],
+    ts808Lite: [-0.8,  -0.77,  -0.74,  -0.7,  -0.66,  -0.61,  -0.55,  -0.48,  -0.4,  -0.32,  -0.22,  -0.12,  -0.02,  0.09,  0.19,  0.29,  0.39,  0.49,  0.57,  0.65,  0.72],
+    fuzzLite: [-14.46,  -13.16,  -11.89,  -10.69,  -9.59,  -8.61,  -7.76,  -7.03,  -6.41,  -5.88,  -5.43,  -5.03,  -4.68,  -4.36,  -4.08,  -3.85,  -3.67,  -3.53,  -3.42,  -3.33,  -3.22],
+    tweedLite: [26.34,  28.57,  30.54,  32.31,  33.97,  35.53,  37.02,  38.42,  39.69,  40.79,  41.72,  42.48,  43.09,  43.58,  43.98,  44.31,  44.58,  44.81,  45,  45.36,  45.58],
     tweed: [26.99,  29.23,  31.15,  32.88,  34.46,  35.86,  37.05,  38.02,  38.79,  39.42,  39.94,  40.37,  40.75,  41.08,  41.38,  41.66,  41.93,  42.22,  42.54,  42.95,  43.62],
   };
   function autoLevelGain(model, rot) {
@@ -701,10 +704,73 @@
   const DRIVE_TICK = 5e-3;
   const DEFAULTS = { model: 'ts808', drive: 0.3, driveSlewMs: 30, outputDb: 0, autoLevel: true };
 
+  // ===========================================================================
+  // Lite: each circuit reduced to a few filters and a smooth clipper, run at 4x
+  // (quality: 'lite'). Not a circuit solve. The filter corners come from the
+  // parts, the gains and clip levels from the full model (small-signal gain at
+  // 1 kHz, output swing at full drive), and each has its own auto-level table.
+  // Only exp and arithmetic, so the C++ twin rounds the same.
+  // ===========================================================================
+  const tanhE = (u) => (u > 20 ? 1 : u < -20 ? -1 : 1 - 2 / (Math.exp(2 * u) + 1));
+  const sclip = (u, lo, hi) => (u > 0 ? hi * tanhE(u / hi) : lo * tanhE(u / lo)); // soft limits +hi / -lo
+  // harder knee: u / (1 + (u/L)^4)^(1/4), limits +hi / -lo
+  const hclip = (u, lo, hi) => { const r = u / (u > 0 ? hi : lo), r2 = r * r; return u / Math.pow(1 + r2 * r2, 0.25); };
+  const pole = (fc, T) => Math.exp(-2 * Math.PI * fc * T); // one-pole low-pass coefficient
+  // Fuzz Face small-signal gain at 1 kHz against Drive, dB, measured from the full model
+  const FUZZ_LITE_GAIN_DB = [-12.94, -11.42, -9.81, -8.11, -6.3, -4.37, -2.31, -0.1, 2.28, 4.85, 7.62, 10.62, 13.85, 17.32, 20.97, 24.69, 28.33, 31.75, 35.09, 38.65, 45.17];
+  function tableAt(t, rot) {
+    const x = Math.min(1, Math.max(0, rot)) * (t.length - 1), i = Math.min(t.length - 2, Math.floor(x)), f = x - i;
+    return t[i] + f * (t[i + 1] - t[i]);
+  }
+  const TS_LITE_TRIM = Math.pow(10, -2.2 / 20);  // the tone stage's loss at noon (lines the 1 kHz gain up)
+  const TWEED_A1 = 55, TWEED_A2 = 26;            // stage gains (V1A bypassed, V1B with 1K5 unbypassed)
+  const TWEED_BEND = 0.1, TWEED_BEND2 = 0.03;    // square-law bend of each stage (V1B's is flattened by its cathode feedback)
+
+  function liteInit(L, model, T) {
+    L.s = new Float64Array(6); // filter states
+    L.a = {
+      in: pole(15.6, T),            // TS: C1 0.02u into the 510K bias; Fuzz: C1 2.2u; Tweed: unused
+      hp: pole(720, T),             // TS: R4 4K7 + C3 47n
+      tone: pole(723, T),           // TS: R7 1K + C5 0.22u
+      miller: pole(14000, T),       // Tweed: 68K stopper into V1A's Miller capacitance
+      out: pole(model === 'tweed' ? 33 : model === 'fuzz' ? 32 : 1.6, T), // output coupling
+    };
+  }
+  function liteFb(P, T) { return pole(1 / (2 * Math.PI * (51e3 + P.drive) * 51e-12), T); } // TS: C4 across the feedback
+
+
+  // one lite step at the oversampled rate: x in volts at the input jack, returns volts out
+  function liteStep(model, L, P, x) {
+    const st = L.s, a = L.a;
+    if (model === 'ts808') {
+      const x1 = x - (st[0] = st[0] + (1 - a.in) * (x - st[0]));          // input coupling high-pass
+      const xh = x1 - (st[1] = st[1] + (1 - a.hp) * (x1 - st[1]));        // 4K7 + 47n leg
+      const g = (51e3 + P.drive) / 4.7e3;
+      const v = (st[2] = st[2] + (1 - L.fb) * (g * xh - st[2]));          // C4 in the feedback
+      const o1 = x1 + sclip(v, 0.42, 0.40);                               // D1/D2 limit the feedback voltage
+      const t = (st[3] = st[3] + (1 - a.tone) * (o1 - st[3]));
+      return t * TS_LITE_TRIM;
+    }
+    if (model === 'fuzz') {
+      const x1 = x - (st[0] = st[0] + (1 - a.in) * (x - st[0]));
+      const y = hclip(L.g * x1, 0.28, 0.20);                              // Q2 saturates one way, cuts off the other
+      return y - (st[1] = st[1] + (1 - a.out) * (y - st[1]));
+    }
+    // tweed
+    const x1 = (st[0] = st[0] + (1 - a.miller) * (x - st[0]));
+    // each stage: the triode's square-law bend, then cutoff below and grid current above
+    const y1 = -TWEED_A1 * hclip(x1 + TWEED_BEND * x1 * x1, 1.8, 1.0);    // V1A
+    const v2 = P.vol * y1;
+    const y2 = -TWEED_A2 * hclip(v2 + TWEED_BEND2 * v2 * v2, 3.0, 5.0);   // V1B through the VOLUME pot
+    const y3 = y2 > 0 ? 25 * tanhE(y2 / 25) : y2;                         // 6V6 grid current
+    return y3 - (st[1] = st[1] + (1 - a.out) * (y3 - st[1]));
+  }
+
   class ColourCircuit {
     constructor(sampleRate, opts = {}) {
       this.fs = sampleRate;
-      this.os = opts.oversample || 1;
+      this.lite = opts.quality === 'lite';
+      this.os = this.lite ? 4 : opts.oversample || 1;
       this.T = 1 / (this.fs * this.os);
       this.ovs = new Oversampler(this.os);
       this.p = Object.assign({}, DEFAULTS);
@@ -720,6 +786,11 @@
       this.P = {};
       this.driveNow = this.driveMid = this.p.drive;
       def.setDrive(this.P, this.driveNow);
+      this.alKey = this.p.model + (this.lite ? 'Lite' : '');
+      if (this.lite) {
+        this.L = {}; liteInit(this.L, this.p.model, this.T); this._liteDrive();
+        this.slewCount = 0; this._derive(); return;
+      }
       this.cir = new Circuit(def.build(this.P), this.T);
       this.u = Float64Array.from([0, ...def.supplies]);
       this.cir.settle(this.u, this.T);
@@ -731,13 +802,19 @@
       this._derive();
     }
 
+    _liteDrive() {
+      const L = this.L;
+      if (this.p.model === 'ts808') L.fb = liteFb(this.P, this.T);
+      if (this.p.model === 'fuzz') L.g = Math.pow(10, tableAt(FUZZ_LITE_GAIN_DB, this.driveNow) / 20);
+    }
+
     _derive() {
       const p = this.p, tau = Math.max(0, p.driveSlewMs) / 1000;
       this.slewA = tau > 0 ? 1 - Math.exp(-2 * this.T / tau) : 1;
       this.slewTick = Math.max(1, Math.round(DRIVE_TICK / this.T));
       this.inGain = this.def.fullScaleVolts;
       this.outGainBase = Math.pow(10, p.outputDb / 20) / this.def.fullScaleVolts;
-      this.outGain = this.outGainBase * (p.autoLevel ? autoLevelGain(p.model, this.driveNow) : 1);
+      this.outGain = this.outGainBase * (p.autoLevel ? autoLevelGain(this.alKey, this.driveNow) : 1);
     }
 
     setParams(o = {}) {
@@ -749,15 +826,37 @@
     info() {
       return {
         name: this.def.name, desc: this.def.desc, latencySamples: this.ovs.latency, driveNow: this.driveNow,
-        autoLevelDb: this.p.autoLevel ? 20 * Math.log10(autoLevelGain(this.p.model, this.p.drive)) : 0,
-        avgIterations: this.steps ? this.cir.iters / this.steps : 0,
-        substeps: this.cir.substeps, unconverged: this.cir.fails,
+        autoLevelDb: this.p.autoLevel ? 20 * Math.log10(autoLevelGain(this.alKey, this.p.drive)) : 0,
+        avgIterations: this.steps && !this.lite ? this.cir.iters / this.steps : 0,
+        substeps: this.lite ? 0 : this.cir.substeps, unconverged: this.lite ? 0 : this.cir.fails,
       };
+    }
+
+    _processLite(input, output, n) {
+      const os = this.os, buf = this.osBuf, L = this.L, P = this.P, model = this.p.model, target = this.p.drive;
+      let gliding = this.driveNow !== target;
+      for (let s = 0; s < n; s++) {
+        const up = this.ovs.up(input[s] * this.inGain);
+        for (let k = 0; k < os; k++) {
+          if (gliding) {
+            const a = this.slewA, m1 = this.driveMid += (target - this.driveMid) * a;
+            let d = this.driveNow + (m1 - this.driveNow) * a;
+            if (Math.abs(target - d) < 1e-5 && Math.abs(target - m1) < 1e-5) { d = this.driveMid = target; gliding = false; }
+            this.driveNow = d;
+            this.def.setDrive(P, d); this._liteDrive();
+            if (this.p.autoLevel) this.outGain = this.outGainBase * autoLevelGain(this.alKey, d);
+          }
+          buf[k] = liteStep(model, L, P, up[k]);
+        }
+        output[s] = this.ovs.down(buf) * this.outGain;
+      }
+      return output;
     }
 
     readPeaks() { const p = this.peak; this.peak = 0; return { clip: p }; }
 
     process(input, output, n = input.length) {
+      if (this.lite) return this._processLite(input, output, n);
       const os = this.os, buf = this.osBuf, C = this.cir, u = this.u, io = this.ixOut, ic = this.ixClip;
       const target = this.p.drive;
       let gliding = this.driveNow !== target;
@@ -770,7 +869,7 @@
             if (Math.abs(target - d) < 1e-5 && Math.abs(target - m1) < 1e-5) { d = this.driveMid = target; gliding = false; }
             this.driveNow = d;
             this.def.setDrive(this.P, d);
-            if (this.p.autoLevel) this.outGain = this.outGainBase * autoLevelGain(this.p.model, d);
+            if (this.p.autoLevel) this.outGain = this.outGainBase * autoLevelGain(this.alKey, d);
             if (!gliding || ++this.slewCount >= this.slewTick) { this.slewCount = 0; C.setT(this.T); }
             else C.updateRV();
           }

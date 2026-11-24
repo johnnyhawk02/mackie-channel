@@ -29,7 +29,7 @@ namespace
     struct ColourVoice : ColourboxVoice
     {
         mackie::ColourCircuit::Settings s; std::unique_ptr<mackie::ColourCircuit> ch;
-        ColourVoice (double rate, int model, int os, double drive) { s.model = model; s.oversample = os; s.drive = drive; ch = std::make_unique<mackie::ColourCircuit> (rate, s); }
+        ColourVoice (double rate, int model, int os, bool lite, double drive) { s.model = model; s.oversample = os; s.lite = lite; s.drive = drive; ch = std::make_unique<mackie::ColourCircuit> (rate, s); }
         void setDrive (double d) override { s.drive = d; ch->setParams (s); }
         void process (const float* in, float* out, int n) override { ch->process (in, out, n); }
         double latencySamples() const override { return ch->latencySamples(); }
@@ -40,8 +40,9 @@ namespace
 ColourboxVoice* ColourboxProcessor::makeVoice (double rate, int circuit, int quality, double drive)
 {
     if (circuit == 0) return new MackieVoice (rate, qualityPreset[quality], drive);
-    // every setting keeps the 15-sample latency: 4x at High, 2x below it
-    return new ColourVoice (rate, circuit - 1, quality == 3 ? 4 : 2, drive);
+    // every setting keeps the 15-sample latency: 4x at High, 2x for Normal and Eco,
+    // and Lite is the formula version at 4x
+    return new ColourVoice (rate, circuit - 1, quality == 3 ? 4 : 2, quality == 0, drive);
 }
 
 ColourboxProcessor::~ColourboxProcessor()

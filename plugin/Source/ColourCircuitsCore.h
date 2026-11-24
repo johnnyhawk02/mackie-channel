@@ -26,6 +26,7 @@ public:
         double outputDb = 0;
         bool autoLevel = true;
         int oversample = 1;
+        bool lite = false; // the formula version at 4x (quality 'lite' in the JS); oversample is ignored
     };
 
     ColourCircuit (double sampleRate, const Settings& s);
@@ -38,7 +39,10 @@ public:
 
 private:
     void derive();
-    void setDrive (double d);
+    void liteDrive();
+    void processLite (const float* input, float* output, int n);
+    struct Lite { double s[6] {}; double in = 0, hp = 0, tone = 0, miller = 0, out = 0, fb = 0, g = 0; } L;
+    bool lite = false;
 
     double fs; int os; double T;
     Oversampler ovs;
