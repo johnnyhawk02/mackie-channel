@@ -125,7 +125,7 @@ private:
     std::vector<int> outNodes;
 
     std::vector<double> Dh, Du, K, Ah, Au, Ai, Oh, Ou, Oi;
-    std::vector<double> Mm, S, Minv, tmp, KT; // KT: K transposed (column j of K contiguous)
+    std::vector<double> Mm, S, Minv, tmp;
     std::vector<double> J, v, i, p, f, jac, dI, dx, vr, vtmp, ftmp, sx, physI, vSave, uPrev, u0, ui;
     std::vector<int> perm;
     bool factored = false;
