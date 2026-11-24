@@ -101,3 +101,23 @@ If the trim marks disagree, the trim taper is the first thing to adjust (`trimRe
 `icons/` also holds the exported sizes: PWA icons (192, 512, maskable 512), `apple-touch-icon.png` (180),
 `favicon.ico` (16/32/48), `icon-1024.png` and `icon.icns` for a macOS plugin bundle or installer.
 `manifest.webmanifest` makes the page installable as an app.
+
+## Colour circuits
+
+`circuits.html` ([live](https://johnnyhawk02.github.io/mackie-channel/circuits.html)) puts three more circuits next to the Mackie, each with the same one Drive knob and auto level, so they can be compared by ear:
+
+| Circuit | What is modelled | Drive is |
+|---|---|---|
+| Tube Screamer (TS808) | 2SC1815 input buffer, JRC4558 clipper with 1N914 diodes in the feedback, 4K7 + 47 nF high-pass, tone stage at noon, output buffer | the 500K DRIVE pot |
+| Fuzz Face | two AC128 germanium PNPs, 9 V positive ground, 100K DC feedback, 1K FUZZ pot with its 20 µF cap, fed from a passive pickup through a 250K volume pot | the FUZZ pot and the guitar volume together |
+| Tweed Champ (Fender 5F1 preamp) | two 12AX7 stages (Koren triode model with grid current) on 250 V, the 1M VOLUME pot between them, into the 6V6 grid with its grid-current clamp | the VOLUME pot |
+
+The core is `colour-circuits-core.js`. Its solver is a copy of the Mackie core's with a triode added, so the Mackie core and the VST3 port are untouched. 0 dBFS is 1 V peak at the circuit's input. Assumed device values (germanium Is, 2SC1815 Is, grid conduction, pickup resistance) are marked ASSUMED in the source. The 6V6 power stage and output transformer are not modelled.
+
+```
+node tools/colour-render.js <ts808|fuzz|tweed> in.wav out.wav <drive 0..1> [oversample=4]
+node tools/colour-thd.js [freq] [dBFS]     # gain and harmonics against Drive
+node tools/colour-autolevel.js             # re-measure the auto-level tables
+```
+
+`renders/colour/` holds the four bass samples through each circuit at Drive 0.3, 0.6 and 1, at 4× oversampling.

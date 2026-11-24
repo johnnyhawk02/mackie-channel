@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Colour Circuits</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.ico" sizes="48x48">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Channel Drive">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#15191b">
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a hardware channel strip on the left (the one Drive knob), a bench on the right (samples, stage headroom, scope). */
+:root {
+  --bg: #e4e6e3;          /* bench */
+  --panel: #c9ccc8;       /* brushed-aluminium strip */
+  --panel-edge: #a9ada8;
+  --ink: #1d2124;         /* silkscreen */
+  --ink-soft: #565d61;
+  --card: #f3f4f2;
+  --cap: #23272a;         /* knob cap */
+  --cap-hi: #3b4246;
+  --pointer: #e9e6dc;
+  --accent: #d2561e;      /* the trim knob's orange ring */
+  --ok: #2f9a4a; --warn: #d6a215; --hot: #d23a2a;
+  --meter-off: #b9bdb8;
+  --scope-bg: #1f2528; --scope-grid: #34403f; --scope-dry: #6c7a7c; --scope-wet: #f08a4b;
+  --f-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191b; --panel: #2a3033; --panel-edge: #3b4347; --ink: #e7e9e4; --ink-soft: #9aa4a7; --card: #1e2326;
+  --cap: #101315; --cap-hi: #2a3134; --pointer: #f1eee4; --accent: #ea6a2c; --meter-off: #384044;
+  --scope-bg: #0d1012; --scope-grid: #233032; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #15191b; --panel: #2a3033; --panel-edge: #3b4347; --ink: #e7e9e4; --ink-soft: #9aa4a7; --card: #1e2326;
+  --cap: #101315; --cap-hi: #2a3134; --pointer: #f1eee4; --accent: #ea6a2c; --meter-off: #384044;
+  --scope-bg: #0d1012; --scope-grid: #233032; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 40px }
+.wrap { max-width: 1060px; margin: 0 auto; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start }
+@media (max-width: 760px) { .wrap { grid-template-columns: 1fr } }
+h1, h2, .silk { font-family: var(--f-display); text-transform: uppercase; letter-spacing: .08em }
+h1 { font-size: 15px; font-weight: 700; margin: 0 }
+h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px; color: var(--ink-soft) }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+
+/* strip */
+.strip { background: linear-gradient(90deg, var(--panel-edge), var(--panel) 6%, var(--panel) 94%, var(--panel-edge));
+  border-radius: 6px; padding: 18px 20px 22px; display: flex; flex-direction: column; align-items: center; gap: 18px }
+.strip header { width: 100%; display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--ink-soft); padding-bottom: 8px }
+.strip header span { font-family: var(--f-mono); font-size: 11px; color: var(--ink-soft) }
+.seg { display: flex; border: 1px solid var(--ink-soft); border-radius: 3px; overflow: hidden }
+.seg button { font: 600 13px var(--f-display); letter-spacing: .08em; text-transform: uppercase; background: transparent; color: var(--ink);
+  border: 0; padding: 6px 14px; cursor: pointer }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--panel) }
+.knob-area { position: relative; width: 236px; height: 236px; touch-action: none }
+.knob-area svg { width: 100%; height: 100%; display: block }
+.knob-area:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 50% }
+.knob-label { text-align: center; display: grid; gap: 2px }
+.knob-label .silk { font-size: 22px; font-weight: 700 }
+.knob-label .mono { font-size: 13px; color: var(--ink-soft) }
+.row { display: flex; gap: 14px; align-items: center; justify-content: center; flex-wrap: wrap; width: 100% }
+.btn { font: 600 13px var(--f-display); letter-spacing: .08em; text-transform: uppercase; background: var(--card); color: var(--ink);
+  border: 1px solid var(--ink-soft); border-radius: 3px; padding: 7px 14px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center }
+.btn[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent) }
+.btn:focus-visible, .seg button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.led { width: 9px; height: 9px; border-radius: 50%; background: var(--meter-off); flex: none }
+.led.on-ok { background: var(--ok); box-shadow: 0 0 6px var(--ok) }
+.led.on-hot { background: var(--hot); box-shadow: 0 0 8px var(--hot) }
+.ol { display: flex; gap: 8px; align-items: center; font: 600 13px var(--f-display); letter-spacing: .08em }
+.small-knob { display: flex; flex-direction: column; align-items: center; gap: 4px }
+.small-knob label { font: 600 12px var(--f-display); letter-spacing: .08em; text-transform: uppercase }
+.small-knob input[type=range] { width: 110px; accent-color: var(--accent) }
+.facts { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-size: 12px; border-top: 1px solid var(--ink-soft); padding-top: 10px }
+.facts dt { color: var(--ink-soft) } .facts dd { margin: 0; text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+
+/* bench */
+.bench { display: grid; gap: 16px; min-width: 0 }
+.card { background: var(--card); border-radius: 6px; padding: 16px 18px; min-width: 0 }
+.samples { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px }
+.samples .btn { justify-content: flex-start; text-transform: none; font: 500 13px var(--f-body); letter-spacing: 0 }
+.drop { margin-top: 10px; border: 1px dashed var(--ink-soft); border-radius: 4px; padding: 12px; text-align: center; color: var(--ink-soft); font-size: 13px }
+.drop.over { border-color: var(--accent); color: var(--ink) }
+.drop label { color: var(--accent); cursor: pointer; text-decoration: underline }
+.transport { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px }
+.status { font-size: 12px; color: var(--ink-soft); margin-left: auto }
+.meters { display: grid; gap: 9px }
+.meter { display: grid; grid-template-columns: 150px minmax(0, 1fr) 64px; gap: 10px; align-items: center; font-size: 12px }
+.meter .name b { font-weight: 500; display: block } .meter .name span { color: var(--ink-soft); font-family: var(--f-mono); font-size: 11px }
+.bar { height: 10px; background: var(--meter-off); border-radius: 2px; position: relative; overflow: hidden }
+.bar i { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, var(--ok) 0 70%, var(--warn) 70% 90%, var(--hot) 90%); background-size: var(--full, 300px) 100% }
+.meter .val { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+.meter.clip .val { color: var(--hot); font-weight: 500 }
+.scale-note { font-size: 11px; color: var(--ink-soft); margin-top: 8px }
+canvas { width: 100%; height: 160px; display: block; border-radius: 4px; background: var(--scope-bg) }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-soft); margin-top: 8px }
+.legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px }
+details summary { cursor: pointer; font: 600 13px var(--f-display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft) }
+details p, details li { max-width: 68ch; font-size: 13px }
+details ol { padding-left: 20px; margin: 8px 0 }
+select { font: 13px var(--f-body); background: var(--card); color: var(--ink); border: 1px solid var(--ink-soft); border-radius: 3px; padding: 4px 6px }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+.circuits { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100% }
+.circuits .btn { justify-content: center }
+.circuit-desc { font-size: 12px; color: var(--ink-soft); text-align: center; min-height: 3.2em; margin: 0 }
+.nav { font-size: 12px }
+.nav a { color: var(--ink) }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <section class="strip" aria-label="Circuit">
+    <header><h1>Colour circuits</h1><span><a href="./" style="color:inherit">Mackie page</a> · <a href="https://github.com/johnnyhawk02/mackie-channel" style="color:inherit">source</a></span></header>
+
+    <div class="circuits" id="circuits" role="group" aria-label="Circuit"></div>
+    <p class="circuit-desc" id="desc"></p>
+
+    <div class="knob-area" id="knob" role="slider" tabindex="0" aria-label="Drive" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <svg viewBox="0 0 236 236" aria-hidden="true">
+        <g id="ticks"></g>
+        <circle cx="118" cy="118" r="70" fill="var(--accent)"/>
+        <circle cx="118" cy="118" r="64" fill="var(--cap)"/>
+        <circle cx="118" cy="118" r="52" fill="var(--cap-hi)"/>
+        <g id="pointer"><rect x="115.5" y="56" width="5" height="34" rx="2.5" fill="var(--pointer)"/></g>
+      </svg>
+    </div>
+    <div class="knob-label">
+      <span class="silk">Drive</span>
+      <span class="mono" id="drive-readout">–</span>
+    </div>
+
+    <dl class="facts">
+      <dt>Drive is</dt><dd id="f-pot">–</dd>
+      <dt>Auto level</dt><dd id="f-auto">–</dd>
+    </dl>
+  </section>
+
+  <div class="bench">
+    <section class="card" aria-labelledby="h-src">
+      <h2 id="h-src">Test signal</h2>
+      <div class="samples" id="sample-list"></div>
+      <div class="drop" id="drop">Drop a WAV/AIFF/MP3 here or <label for="file">choose a file</label><input id="file" type="file" accept="audio/*" hidden></div>
+      <div class="transport">
+        <button class="btn" id="play">▶ Play</button>
+        <button class="btn" id="loop" aria-pressed="true">Loop</button>
+        <button class="btn" id="bypass" aria-pressed="false">Bypass</button>
+        <span class="status" id="status">Pick a sample to start.</span>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-scope">
+      <h2 id="h-scope">Scope</h2>
+      <canvas id="scope" width="1200" height="320"></canvas>
+      <div class="legend"><span><i style="background:var(--scope-dry)"></i>Input</span><span><i style="background:var(--scope-wet)"></i>Output</span></div>
+    </section>
+
+    <section class="card">
+      <details open>
+        <summary>What is modelled</summary>
+        <p>Each circuit is a netlist of the real parts, solved sample by sample with the same nonlinear circuit solver as the Mackie channel. Nothing is a waveshaper. Auto level keeps the loudness about where the dry signal was, so you can switch circuits and compare tone rather than volume.</p>
+        <ol>
+          <li><b>Mackie CR1604-VLZ</b>: the existing channel model, unchanged.</li>
+          <li><b>Tube Screamer (TS808)</b>: 2SC1815 input buffer, JRC4558 non-inverting clipper with 1N914 diodes in the feedback, the 4K7 + 47 nF high-pass that gives the mid hump, tone stage at noon, output buffer. Drive is the 500K DRIVE pot.</li>
+          <li><b>Fuzz Face</b>: two AC128 germanium PNPs on 9 V positive ground, 100K DC feedback, 1K FUZZ pot with its 20 µF cap, fed from a passive pickup through a 250K volume pot. Drive turns the FUZZ pot and the guitar volume up together, which is how a Fuzz Face cleans up and breaks up.</li>
+          <li><b>Tweed Champ (Fender 5F1 preamp)</b>: two 12AX7 triode stages (Koren model with grid current) on 250 V, 100K plates, 1K5 cathodes, the 1M VOLUME pot between them, into the 6V6 grid with its grid-current clamp. Drive is the VOLUME pot. The 6V6 power stage and output transformer are not modelled.</li>
+        </ol>
+        <p>0 dBFS is taken as 1 V peak at the pedal or amp input (a hot pickup), and +18 dBu for the Mackie. Assumed values are listed in the source.</p>
+      </details>
+    </section>
+  </div>
+</div>
+
+<script src="mackie-channel-core.js"></script>
+<script src="colour-circuits-core.js"></script>
+<script>
+(() => {
+  const MC = window.MackieChannelCore, CC = window.ColourCircuitsCore;
+  const SAMPLES = [
+    ['19 Bass', 'samples/19-bass-6a.wav'], ['Arabian Sub', 'samples/arabian-sub-6a.wav'],
+    ['Aura Bass', 'samples/aura-bass-9b.wav'], ['Beta Bass', 'samples/beta-bass-11a.wav'],
+  ];
+  const CIRCUITS = [
+    ['mackie', 'Mackie', 'Mackie CR1604-VLZ channel: discrete preamp and op-amps.', 'channel TRIM'],
+    ['ts808', 'Tube Screamer', CC.CIRCUITS.ts808.desc, 'DRIVE pot, 500K'],
+    ['fuzz', 'Fuzz Face', CC.CIRCUITS.fuzz.desc, 'FUZZ pot + guitar volume'],
+    ['tweed', 'Tweed Champ', CC.CIRCUITS.tweed.desc, 'VOLUME pot, 1M'],
+  ];
+  const state = { model: 'ts808', drive: 0.3, bypass: false, loop: true };
+  try { const m = localStorage.getItem('colour-model'); if (CIRCUITS.some((c) => c[0] === m)) state.model = m; } catch {}
+  const $ = (id) => document.getElementById(id);
+  const fmtDb = (v) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + ' dB';
+
+  /* ---------------- circuit picker ---------------- */
+  const picker = $('circuits');
+  CIRCUITS.forEach(([key, name]) => {
+    const b = document.createElement('button'); b.className = 'btn'; b.textContent = name; b.dataset.key = key;
+    b.onclick = () => { state.model = key; try { localStorage.setItem('colour-model', key); } catch {} renderPicker(); renderKnob(); push(); };
+    picker.appendChild(b);
+  });
+  function renderPicker() {
+    picker.querySelectorAll('.btn').forEach((b) => b.setAttribute('aria-pressed', b.dataset.key === state.model));
+    const c = CIRCUITS.find((x) => x[0] === state.model); $('desc').textContent = c[2]; $('f-pot').textContent = c[3];
+  }
+
+  /* ---------------- knob ---------------- */
+  const A0 = -135, A1 = 135;
+  function drawTicks() {
+    const ns = 'http://www.w3.org/2000/svg', g = $('ticks');
+    for (let i = 0; i <= 40; i++) {
+      const a = (A0 + i / 40 * (A1 - A0)) * Math.PI / 180, r0 = 78, r1 = i % 4 ? 83 : 86;
+      const l = document.createElementNS(ns, 'line');
+      l.setAttribute('x1', 118 + r0 * Math.sin(a)); l.setAttribute('y1', 118 - r0 * Math.cos(a));
+      l.setAttribute('x2', 118 + r1 * Math.sin(a)); l.setAttribute('y2', 118 - r1 * Math.cos(a));
+      l.setAttribute('stroke', 'var(--ink-soft)'); l.setAttribute('stroke-width', '1.2'); g.appendChild(l);
+    }
+    for (let m = 0; m <= 10; m += 2) {
+      const a = (A0 + m / 10 * (A1 - A0)) * Math.PI / 180, t = document.createElementNS(ns, 'text');
+      t.setAttribute('x', 118 + 101 * Math.sin(a)); t.setAttribute('y', 118 - 101 * Math.cos(a) + 4);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', 'var(--ink)');
+      t.setAttribute('font-family', 'Barlow Condensed, Arial Narrow, sans-serif'); t.setAttribute('font-size', '14'); t.setAttribute('font-weight', '600');
+      t.textContent = m; g.appendChild(t);
+    }
+  }
+  const probes = {};
+  function autoDb() {
+    const k = state.model;
+    if (k === 'mackie') { probes.m ||= new MC.MackieChannel(48000); probes.m.setParams({ drive: state.drive }); return probes.m.info().autoLevelDb; }
+    const t = CC.AUTO_LEVEL_DB[k], x = state.drive * (t.length - 1), i = Math.min(t.length - 2, Math.floor(x)), f = x - i;
+    return -(t[i] + f * (t[i + 1] - t[i]));
+  }
+  function renderKnob() {
+    $('pointer').setAttribute('transform', `rotate(${A0 + state.drive * (A1 - A0)} 118 118)`);
+    $('knob').setAttribute('aria-valuenow', Math.round(state.drive * 100));
+    $('drive-readout').textContent = (state.drive * 10).toFixed(1);
+    $('knob').setAttribute('aria-valuetext', (state.drive * 10).toFixed(1));
+    $('f-auto').textContent = fmtDb(autoDb());
+  }
+  function setDrive(v) { state.drive = Math.min(1, Math.max(0, v)); renderKnob(); push(); }
+  const knob = $('knob'); let drag = null;
+  knob.addEventListener('pointerdown', (e) => { knob.setPointerCapture(e.pointerId); drag = { y: e.clientY, x: e.clientX, v: state.drive }; knob.focus(); });
+  knob.addEventListener('pointermove', (e) => { if (!drag) return; const fine = e.shiftKey ? 0.2 : 1;
+    setDrive(drag.v + ((drag.y - e.clientY) + (e.clientX - drag.x)) / 260 * fine); });
+  knob.addEventListener('pointerup', () => { drag = null; });
+  knob.addEventListener('pointercancel', () => { drag = null; });
+  knob.addEventListener('wheel', (e) => { e.preventDefault(); setDrive(state.drive - Math.sign(e.deltaY) * (e.shiftKey ? 0.004 : 0.02)); }, { passive: false });
+  knob.addEventListener('dblclick', () => setDrive(0));
+  knob.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 0.005 : 0.02;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') setDrive(state.drive + step);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') setDrive(state.drive - step);
+    else if (e.key === 'Home') setDrive(0); else if (e.key === 'End') setDrive(1); else return;
+    e.preventDefault();
+  });
+
+  const toggle = (id, key, after) => { $(id).onclick = () => { state[key] = !state[key]; $(id).setAttribute('aria-pressed', state[key]); after && after(); }; };
+  toggle('bypass', 'bypass', push); toggle('loop', 'loop', () => { if (src) src.loop = state.loop; });
+
+  /* ---------------- audio ---------------- */
+  let ctx = null, node = null, port = null, sp = null, src = null, buffer = null, playing = false, anIn, anOut;
+  const status = (t) => { $('status').textContent = t; };
+  function makeModel(fs, model, drive) {
+    return model === 'mackie' ? new MC.MackieChannel(fs, { drive }) : new CC.ColourCircuit(fs, { model, drive });
+  }
+  function push() {
+    const msg = { model: state.model, drive: state.drive, bypass: state.bypass };
+    if (port) port.postMessage(msg);
+    if (sp) sp.update(msg);
+  }
+  const workletSource = () => `
+    const MC = (${MC.factory.toString()})(), CC = (${CC.factory.toString()})();
+    class ColourProcessor extends AudioWorkletProcessor {
+      constructor() { super(); this.ch = null; this.model = null; this.drive = 0; this.bypass = false;
+        this.port.onmessage = (e) => { const d = e.data; this.bypass = d.bypass; this.drive = d.drive;
+          if (d.model !== this.model) { this.model = d.model; this.ch = null; }
+          else if (this.ch) this.ch.setParams({ drive: d.drive }); }; }
+      process(inputs, outputs) {
+        const inp = inputs[0], out = outputs[0], n = out[0].length;
+        if (!this.x || this.x.length !== n) { this.x = new Float32Array(n); this.y = new Float32Array(n); }
+        const x = this.x; x.fill(0);
+        for (const c of inp) for (let i = 0; i < n; i++) x[i] += c[i] / inp.length;
+        if (!this.model) { for (const o of out) o.set(x); return true; }
+        if (!this.ch) this.ch = this.model === 'mackie' ? new MC.MackieChannel(sampleRate, { drive: this.drive }) : new CC.ColourCircuit(sampleRate, { model: this.model, drive: this.drive });
+        this.ch.process(x, this.y);
+        const y = this.bypass ? x : this.y;
+        for (const o of out) o.set(y);
+        return true;
+      }
+    }
+    registerProcessor('colour-circuits', ColourProcessor);`;
+  async function ensureAudio() {
+    if (ctx) { if (ctx.state === 'suspended') await ctx.resume(); return; }
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    anIn = ctx.createAnalyser(); anOut = ctx.createAnalyser(); anIn.fftSize = anOut.fftSize = 4096;
+    try {
+      const url = URL.createObjectURL(new Blob([workletSource()], { type: 'application/javascript' }));
+      await ctx.audioWorklet.addModule(url);
+      node = new AudioWorkletNode(ctx, 'colour-circuits', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+      port = node.port;
+    } catch (err) {
+      node = ctx.createScriptProcessor(1024, 2, 2);
+      sp = { m: null, key: null, update(msg) { if (msg.model !== this.key) { this.key = msg.model; this.m = makeModel(ctx.sampleRate, msg.model, msg.drive); } else this.m.setParams({ drive: msg.drive }); } };
+      const xm = new Float32Array(1024), ym = new Float32Array(1024);
+      node.onaudioprocess = (e) => {
+        const ib = e.inputBuffer, ob = e.outputBuffer; xm.fill(0);
+        for (let c = 0; c < ib.numberOfChannels; c++) { const d = ib.getChannelData(c); for (let i = 0; i < 1024; i++) xm[i] += d[i] / ib.numberOfChannels; }
+        sp.m.process(xm, ym);
+        for (let c = 0; c < ob.numberOfChannels; c++) ob.getChannelData(c).set(state.bypass ? xm : ym);
+      };
+    }
+    node.connect(anOut); anOut.connect(ctx.destination);
+    push();
+    requestAnimationFrame(frame);
+  }
+  async function loadArrayBuffer(ab, name) {
+    await ensureAudio();
+    try { buffer = await ctx.decodeAudioData(ab); }
+    catch { status(`Could not decode ${name}. Try a WAV, AIFF or MP3 file.`); return; }
+    status(`${name} · ${buffer.duration.toFixed(2)} s`);
+    start();
+  }
+  function stop() { if (src) { try { src.stop(); } catch {} src.disconnect(); src = null; } playing = false; $('play').textContent = '▶ Play'; }
+  function start() {
+    if (!buffer) return; stop();
+    src = ctx.createBufferSource(); src.buffer = buffer; src.loop = state.loop;
+    src.connect(node); src.connect(anIn); src.start(); playing = true; $('play').textContent = '■ Stop';
+    src.onended = () => { if (!state.loop) stop(); };
+  }
+  $('play').onclick = async () => { await ensureAudio(); if (playing) stop(); else if (buffer) start(); else status('Pick a sample first.'); };
+
+  const list = $('sample-list');
+  SAMPLES.forEach(([name, url]) => {
+    const b = document.createElement('button'); b.className = 'btn'; b.textContent = name;
+    b.onclick = async () => {
+      list.querySelectorAll('.btn').forEach((x) => x.setAttribute('aria-pressed', x === b));
+      try { const r = await fetch(url); if (!r.ok) throw 0; await loadArrayBuffer(await r.arrayBuffer(), name); }
+      catch { status(`Couldn't load ${name}. If you opened this page as a local file, drop the WAV in instead.`); }
+    };
+    list.appendChild(b);
+  });
+  const readFile = (f) => { if (!f) return; list.querySelectorAll('.btn').forEach((x) => x.setAttribute('aria-pressed', false)); f.arrayBuffer().then((ab) => loadArrayBuffer(ab, f.name)); };
+  $('file').onchange = (e) => readFile(e.target.files[0]);
+  const drop = $('drop');
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); readFile(e.dataTransfer.files[0]); });
+
+  /* ---------------- scope ---------------- */
+  const cv = $('scope'), g = cv.getContext('2d'), bufIn = new Float32Array(4096), bufOut = new Float32Array(4096);
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function drawScope() {
+    const W = cv.width, H = cv.height; g.fillStyle = cssVar('--scope-bg'); g.fillRect(0, 0, W, H);
+    g.strokeStyle = cssVar('--scope-grid'); g.lineWidth = 1;
+    for (let i = 1; i < 8; i++) { g.beginPath(); g.moveTo(i * W / 8, 0); g.lineTo(i * W / 8, H); g.stroke(); }
+    for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(0, i * H / 4); g.lineTo(W, i * H / 4); g.stroke(); }
+    if (!anIn) return;
+    anIn.getFloatTimeDomainData(bufIn); anOut.getFloatTimeDomainData(bufOut);
+    let t = 0; for (let i = 1; i < 2048; i++) if (bufOut[i - 1] < 0 && bufOut[i] >= 0) { t = i; break; }
+    const N = 2048, plot = (b, col, w) => { g.strokeStyle = col; g.lineWidth = w; g.beginPath();
+      for (let i = 0; i < N; i++) { const x = i / N * W, y = H / 2 - b[t + i] * H * 0.46; i ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke(); };
+    plot(bufIn, cssVar('--scope-dry'), 2); plot(bufOut, cssVar('--scope-wet'), 3);
+  }
+  function frame() { drawScope(); requestAnimationFrame(frame); }
+
+  drawTicks(); renderPicker(); renderKnob(); drawScope();
+})();
+</script>
+</body>
+</html>
