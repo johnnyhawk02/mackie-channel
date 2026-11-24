@@ -692,7 +692,10 @@
     fuzz: [-13.9,  -12.92,  -11.59,  -10.38,  -9.35,  -8.49,  -7.75,  -7.12,  -6.58,  -6.12,  -5.71,  -5.34,  -5,  -4.68,  -4.39,  -4.16,  -3.98,  -3.87,  -3.82,  -3.87,  -4.06],
     ts808Lite: [-0.8,  -0.77,  -0.74,  -0.7,  -0.66,  -0.61,  -0.55,  -0.48,  -0.4,  -0.32,  -0.22,  -0.12,  -0.02,  0.09,  0.19,  0.29,  0.39,  0.49,  0.57,  0.65,  0.72],
     fuzzLite: [-14.46,  -13.16,  -11.89,  -10.69,  -9.59,  -8.61,  -7.76,  -7.03,  -6.41,  -5.88,  -5.43,  -5.03,  -4.68,  -4.36,  -4.08,  -3.85,  -3.67,  -3.53,  -3.42,  -3.33,  -3.22],
-    tweedLite: [26.34,  28.57,  30.54,  32.31,  33.97,  35.53,  37.02,  38.42,  39.69,  40.79,  41.72,  42.48,  43.09,  43.58,  43.98,  44.31,  44.58,  44.81,  45,  45.36,  45.58],
+    tweedLite: [26.35,  28.58,  30.54,  32.31,  33.97,  35.53,  37.04,  38.47,  39.81,  41.01,  42.05,  42.91,  43.62,  44.2,  44.67,  45.06,  45.37,  45.64,  45.86,  46.06,  46.23],
+    ts808Lite2: [-0.83,  -0.81,  -0.78,  -0.75,  -0.72,  -0.68,  -0.64,  -0.59,  -0.53,  -0.48,  -0.41,  -0.35,  -0.29,  -0.23,  -0.17,  -0.12,  -0.07,  -0.03,  0.01,  0.04,  0.07],
+    fuzzLite2: [-14.46,  -13.15,  -11.88,  -10.67,  -9.57,  -8.6,  -7.75,  -7.02,  -6.41,  -5.88,  -5.43,  -5.03,  -4.68,  -4.36,  -4.08,  -3.86,  -3.68,  -3.54,  -3.43,  -3.35,  -3.24],
+    tweedLite2: [26.86,  29.01,  30.67,  32.01,  33.14,  34.08,  34.87,  35.54,  36.11,  36.61,  37.05,  37.44,  37.78,  38.09,  38.37,  38.62,  38.85,  39.06,  39.27,  39.49,  39.63],
     tweed: [26.99,  29.23,  31.15,  32.88,  34.46,  35.86,  37.05,  38.02,  38.79,  39.42,  39.94,  40.37,  40.75,  41.08,  41.38,  41.66,  41.93,  42.22,  42.54,  42.95,  43.62],
   };
   function autoLevelGain(model, rot) {
@@ -715,6 +718,7 @@
   const sclip = (u, lo, hi) => (u > 0 ? hi * tanhE(u / hi) : lo * tanhE(u / lo)); // soft limits +hi / -lo
   // harder knee: u / (1 + (u/L)^4)^(1/4), limits +hi / -lo
   const hclip = (u, lo, hi) => { const r = u / (u > 0 ? hi : lo), r2 = r * r; return u / Math.pow(1 + r2 * r2, 0.25); };
+  const bend = (u, k) => u + k * u * u; // square-law bend, on a clipped (bounded) signal so it stays monotonic
   const pole = (fc, T) => Math.exp(-2 * Math.PI * fc * T); // one-pole low-pass coefficient
   // Fuzz Face small-signal gain at 1 kHz against Drive, dB, measured from the full model
   const FUZZ_LITE_GAIN_DB = [-12.94, -11.42, -9.81, -8.11, -6.3, -4.37, -2.31, -0.1, 2.28, 4.85, 7.62, 10.62, 13.85, 17.32, 20.97, 24.69, 28.33, 31.75, 35.09, 38.65, 45.17];
@@ -758,18 +762,80 @@
     }
     // tweed
     const x1 = (st[0] = st[0] + (1 - a.miller) * (x - st[0]));
-    // each stage: the triode's square-law bend, then cutoff below and grid current above
-    const y1 = -TWEED_A1 * hclip(x1 + TWEED_BEND * x1 * x1, 1.8, 1.0);    // V1A
+    // each stage: cutoff below and grid current above, then the triode's square-law bend
+    const y1 = -TWEED_A1 * bend(hclip(x1, 1.8, 1.0), TWEED_BEND);         // V1A
     const v2 = P.vol * y1;
-    const y2 = -TWEED_A2 * hclip(v2 + TWEED_BEND2 * v2 * v2, 3.0, 5.0);   // V1B through the VOLUME pot
+    const y2 = -TWEED_A2 * bend(hclip(v2, 3.0, 5.0), TWEED_BEND2);        // V1B through the VOLUME pot
     const y3 = y2 > 0 ? 25 * tanhE(y2 / 25) : y2;                         // 6V6 grid current
     return y3 - (st[1] = st[1] + (1 - a.out) * (y3 - st[1]));
+  }
+
+  // 'lite2' (experimental): the same reductions, but the one nonlinear node in
+  // each circuit is solved with its reactive parts, so they interact:
+  //   TS     the clipping diodes, C4 and the feedback resistor are solved together
+  //          against the 4K7 + 47n leg (one node, Newton): clipping changes the tone
+  //   Fuzz   Q1's base current on the clipping side charges C1 2.2u, so the bias
+  //          shifts with playing: gating and sputter, recovering as C1 discharges
+  //   Tweed  grid current through each coupling cap (into V1B and the 6V6) charges
+  //          it and shifts the bias: blocking, sag and recovery
+  const TS2 = { R4: 4.7e3, C3: 0.047e-6, C4: 51e-12, Is: 2.52e-9, nvt: 1.752 * 0.025852 };
+  function tsFeedback(L, P, i, T) {
+    // solve i = vd/Rf + C4 (vd - vd0)/T + 2 Is sinh(vd/nVt) for vd (backward Euler on C4)
+    const g = 1 / (51e3 + P.drive) + TS2.C4 / T, rhs = i + TS2.C4 / T * L.vd, nvt = TS2.nvt, k = 2 * TS2.Is;
+    let v = L.vd;
+    for (let it = 0; it < 12; it++) {
+      const e = Math.exp(v / nvt), sh = (e - 1 / e) / 2, ch = (e + 1 / e) / 2;
+      const f = g * v + k * sh - rhs, df = g + k * ch / nvt;
+      let dv = -f / df;
+      if (dv > 0.05) dv = 0.05; else if (dv < -0.05) dv = -0.05;
+      v += dv;
+      if (dv < 1e-9 && dv > -1e-9) break;
+    }
+    L.vd = v;
+    return v;
+  }
+  function liteStep2(model, L, P, x, T) {
+    const st = L.s, a = L.a;
+    if (model === 'ts808') {
+      const x1 = x - (st[0] = st[0] + (1 - a.in) * (x - st[0]));
+      // the leg R4 + C3 from the inverting input (at x1) to ground, backward Euler
+      const kc = T / (TS2.R4 * TS2.C3);
+      st[1] = (st[1] + kc * x1) / (1 + kc);
+      const i = (x1 - st[1]) / TS2.R4;
+      const o1 = x1 + tsFeedback(L, P, i, T);
+      const t = (st[3] = st[3] + (1 - a.tone) * (o1 - st[3]));
+      return t * TS_LITE_TRIM;
+    }
+    if (model === 'fuzz') {
+      // C1 as an explicit cap: the input high-pass, plus base current on the clipping side
+      const x1 = x - st[0];
+      const u = L.g * x1, y = hclip(u, 0.28, 0.20);
+      const over = u > 0 ? (u - y) / L.g : 0;                              // drive beyond the clip, in input volts
+      st[0] = st[0] + (1 - a.in) * (x - st[0]) + T * over / (10e3 * 2.2e-6); // C1 charges through about 10K of source
+      return y - (st[1] = st[1] + (1 - a.out) * (y - st[1]));
+    }
+    // tweed. Signals are relative to each grid's bias; grid current starts 1 V above it.
+    const x1 = (st[0] = st[0] + (1 - a.miller) * (x - st[0]));
+    const g1 = x1 > 1 ? 1 + (x1 - 1) * (1500 / (1500 + 68e3)) : x1;       // V1A grid through the 68K stopper
+    const y1 = -TWEED_A1 * bend(hclip(g1, 1.8, 8), TWEED_BEND);
+    // V1B: 0.022u coupling cap into the VOLUME pot, the wiper drives the grid
+    const rs = 38e3 * P.vol + 1e6 * P.vol * (1 - P.vol);                   // source impedance at the wiper
+    let v2 = P.vol * y1 - st[2];
+    let ig = 0;
+    if (v2 > 1) { ig = (v2 - 1) / (rs + 1500); v2 = 1 + ig * 1500; }
+    st[2] += T * (ig - st[2] / (1e6 + 38e3)) / 0.022e-6;                   // charges with grid current, leaks through the pot
+    const y2 = -TWEED_A2 * bend(hclip(v2, 3.0, 8), TWEED_BEND2);
+    // 6V6 grid: 0.022u into 220K, grid current above its bias (+20 V on the 470R)
+    let v3 = y2 - st[3], ig3 = 0;
+    if (v3 > 20) { ig3 = (v3 - 20) / (38e3 + 1000); v3 = 20 + ig3 * 1000; }
+    st[3] += T * (ig3 - st[3] / (220e3 + 38e3)) / 0.022e-6;
+    return v3 - (st[1] = st[1] + (1 - a.out) * (v3 - st[1]));
   }
 
   class ColourCircuit {
     constructor(sampleRate, opts = {}) {
       this.fs = sampleRate;
-      this.lite = opts.quality === 'lite';
+      this.lite = opts.quality === 'lite' || opts.quality === 'lite2'; this.lite2 = opts.quality === 'lite2';
       this.os = this.lite ? 4 : opts.oversample || 1;
       this.T = 1 / (this.fs * this.os);
       this.ovs = new Oversampler(this.os);
@@ -786,9 +852,9 @@
       this.P = {};
       this.driveNow = this.driveMid = this.p.drive;
       def.setDrive(this.P, this.driveNow);
-      this.alKey = this.p.model + (this.lite ? 'Lite' : '');
+      this.alKey = this.p.model + (this.lite2 ? 'Lite2' : this.lite ? 'Lite' : '');
       if (this.lite) {
-        this.L = {}; liteInit(this.L, this.p.model, this.T); this._liteDrive();
+        this.L = { vd: 0 }; liteInit(this.L, this.p.model, this.T); this._liteDrive();
         this.slewCount = 0; this._derive(); return;
       }
       this.cir = new Circuit(def.build(this.P), this.T);
@@ -846,7 +912,7 @@
             this.def.setDrive(P, d); this._liteDrive();
             if (this.p.autoLevel) this.outGain = this.outGainBase * autoLevelGain(this.alKey, d);
           }
-          buf[k] = liteStep(model, L, P, up[k]);
+          buf[k] = this.lite2 ? liteStep2(model, L, P, up[k], this.T) : liteStep(model, L, P, up[k]);
         }
         output[s] = this.ovs.down(buf) * this.outGain;
       }

@@ -126,7 +126,7 @@ static const CircuitDef& circuitDef (int model)
           { -14.46, -13.16, -11.89, -10.69, -9.59, -8.61, -7.76, -7.03, -6.41, -5.88, -5.43, -5.03, -4.68, -4.36, -4.08, -3.85, -3.67, -3.53, -3.42, -3.33, -3.22 } },
         { 1.0, { 250, 20 }, [] (ColourCircuit::Values& P, double d) { P.vol = aTaper (0.2 + 0.8 * d); }, buildTweed,
           { 26.99, 29.23, 31.15, 32.88, 34.46, 35.86, 37.05, 38.02, 38.79, 39.42, 39.94, 40.37, 40.75, 41.08, 41.38, 41.66, 41.93, 42.22, 42.54, 42.95, 43.62 },
-          { 26.34, 28.57, 30.54, 32.31, 33.97, 35.53, 37.02, 38.42, 39.69, 40.79, 41.72, 42.48, 43.09, 43.58, 43.98, 44.31, 44.58, 44.81, 45, 45.36, 45.58 } },
+          { 26.35, 28.58, 30.54, 32.31, 33.97, 35.53, 37.04, 38.47, 39.81, 41.01, 42.05, 42.91, 43.62, 44.2, 44.67, 45.06, 45.37, 45.64, 45.86, 46.06, 46.23 } },
     };
     return defs[std::min (2, std::max (0, model))];
 }
@@ -148,6 +148,7 @@ static constexpr double PI_ = 3.141592653589793;
 static double tanhE (double u) { return u > 20 ? 1 : u < -20 ? -1 : 1 - 2 / (jsmath::exp (2 * u) + 1); }
 static double sclip (double u, double lo, double hi) { return u > 0 ? hi * tanhE (u / hi) : lo * tanhE (u / lo); }
 static double hclip (double u, double lo, double hi) { const double r = u / (u > 0 ? hi : lo), r2 = r * r; return u / jsmath::pow (1 + r2 * r2, 0.25); }
+static double bend (double u, double k) { return u + k * u * u; }
 static double pole (double fc, double T) { return jsmath::exp (-2 * PI_ * fc * T); }
 static const double FUZZ_LITE_GAIN_DB[21] = { -12.94, -11.42, -9.81, -8.11, -6.3, -4.37, -2.31, -0.1, 2.28, 4.85, 7.62, 10.62, 13.85, 17.32, 20.97, 24.69, 28.33, 31.75, 35.09, 38.65, 45.17 };
 static double tableAt (const double* t, int len, double rot)
@@ -251,9 +252,9 @@ void ColourCircuit::processLite (const float* input, float* output, int n)
             else
             {
                 const double x1 = (st[0] = st[0] + (1 - L.miller) * (x - st[0]));
-                const double y1 = -TWEED_A1 * hclip (x1 + TWEED_BEND * x1 * x1, 1.8, 1.0);
+                const double y1 = -TWEED_A1 * bend (hclip (x1, 1.8, 1.0), TWEED_BEND);
                 const double v2 = Pv.vol * y1;
-                const double y2 = -TWEED_A2 * hclip (v2 + TWEED_BEND2 * v2 * v2, 3.0, 5.0);
+                const double y2 = -TWEED_A2 * bend (hclip (v2, 3.0, 5.0), TWEED_BEND2);
                 const double y3 = y2 > 0 ? 25 * tanhE (y2 / 25) : y2;
                 y = y3 - (st[1] = st[1] + (1 - L.out) * (y3 - st[1]));
             }
