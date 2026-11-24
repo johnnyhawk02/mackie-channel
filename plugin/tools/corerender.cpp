@@ -1,7 +1,7 @@
 // Core-only render: raw mono float32 in -> raw float32 out, the same steps as
 // tools/render.js (pad by the latency, trim it off). Optional drive automation:
 //   corerender in.f32 out.f32 <drive> [oversample=4 | lite | eco | normal | high] [block=128] [drive2 at-sample]
-// CIRCUIT=ts808|fuzz|tweed renders that colour circuit instead (oversample must be a number).
+// CIRCUIT=ts808|fuzz|tweed renders that colour circuit instead (oversample a number, or lite).
 #include "../Source/MackieChannelCore.h"
 #include "../Source/ColourCircuitsCore.h"
 #include <chrono>
@@ -26,7 +26,7 @@ int main (int argc, char** argv)
     {
         mackie::ColourCircuit::Settings cs; const std::string cn = circuit;
         cs.model = cn == "fuzz" ? mackie::ColourCircuit::Fuzz : cn == "tweed" ? mackie::ColourCircuit::Tweed : mackie::ColourCircuit::TS808;
-        cs.drive = o.drive; cs.oversample = argc > 4 ? std::atoi (argv[4]) : 4;
+        cs.drive = o.drive; cs.oversample = argc > 4 ? std::atoi (argv[4]) : 4; cs.lite = argc > 4 && std::string (argv[4]) == "lite";
         mackie::ColourCircuit m (sr, cs);
         const int tail = (int) std::ceil (m.latencySamples());
         std::vector<float> xx (x.size() + tail, 0.0f), yy (x.size() + tail, 0.0f);

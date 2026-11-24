@@ -19,12 +19,13 @@ const loud = (x, fs) => { const k = kweight(x, fs); let s = 0; for (const v of k
 const names = ['19-bass-6a', 'arabian-sub-6a', 'aura-bass-9b', 'beta-bass-11a'];
 const src = names.map((n) => { const w = readWav(require('path').join(__dirname, '../samples', n + '.wav')); return { sr: w.sr, x: Float32Array.from(w.chans[0]) }; });
 const steps = 20, out = {};
+const quality = process.env.QUALITY; // QUALITY=lite measures the lite tables
 for (const model of ['ts808', 'fuzz', 'tweed']) {
   const table = [];
   for (let s = 0; s <= steps; s++) {
     const d = s / steps; let sum = 0;
     for (const { sr, x } of src) {
-      const m = new ColourCircuit(sr, { model, drive: d, autoLevel: false });
+      const m = new ColourCircuit(sr, { model, drive: d, autoLevel: false, quality });
       const y = m.process(x, new Float32Array(x.length));
       sum += loud(y, sr) - loud(x, sr);
     }
