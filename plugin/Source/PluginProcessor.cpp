@@ -62,18 +62,16 @@ double ColourboxProcessor::channelGainDb (double drive)
     return 20 * std::log10 (pad * gd * 5110 / 10000);
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout ColourboxProcessor::createLayout (ColourboxProcessor* self)
+juce::AudioProcessorValueTreeState::ParameterLayout ColourboxProcessor::createLayout (ColourboxProcessor*)
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "drive", 1 }, "Drive", juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f,
         juce::AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([self] (float v, int)
+            .withStringFromValueFunction ([] (float v, int)
             {
-                // the colour circuits show the knob's 0-10 scale; the Mackie its channel gain
-                if (self->circuitIndex() != 0) return juce::String (v * 10.0f, 1);
-                const double db = channelGainDb (v);
-                return (db >= 0 ? "+" : "-") + juce::String (std::abs (db), 1) + " dB";
+                // the knob's 0-10 scale, the same on every circuit (the stored value is still 0-1)
+                return juce::String (v * 10.0f, 1);
             })));
     // added after Drive: sessions saved before it load as High, the sound they had
     layout.add (std::make_unique<juce::AudioParameterChoice> (

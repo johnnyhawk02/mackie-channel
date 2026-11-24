@@ -32,7 +32,7 @@ void DriveKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width
     const juce::Point<float> c ((float) x + width * 0.5f, (float) y + height * 0.5f);
     auto disc = [&] (float r, juce::Colour col) { g.setColour (col); g.fillEllipse (c.x - r * s, c.y - r * s, 2 * r * s, 2 * r * s); };
 
-    // scale: 41 fine ticks, then the channel gain in dB at the marks
+    // scale: 41 fine ticks, then 0 to 10 at the marks
     for (int i = 0; i <= 40; i++)
     {
         const float a = juce::degreesToRadians (a0 + i / 40.0f * (a1 - a0));
@@ -42,24 +42,13 @@ void DriveKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width
                     c.x + r1 * s * std::sin (a), c.y - r1 * s * std::cos (a), 1.2f * s);
     }
     g.setFont (juce::FontOptions (14.0f * s, juce::Font::bold));
-    if (circuit != 0) // colour circuits: 0 to 10, as on the circuits page
-        for (int m = 0; m <= 10; m += 2)
-        {
-            const float a = juce::degreesToRadians (a0 + m / 10.0f * (a1 - a0));
-            const juce::Point<float> p (c.x + 101 * s * std::sin (a), c.y - 101 * s * std::cos (a));
-            g.setColour (ink);
-            g.drawText (juce::String (m), juce::Rectangle<float> (40 * s, 18 * s).withCentre (p), juce::Justification::centred);
-        }
-    const double lo = ColourboxProcessor::channelGainDb (0), hi = ColourboxProcessor::channelGainDb (1);
-    if (circuit == 0)
-    for (int m : { -10, 0, 10, 20, 30, 40, 50 })
+    // every circuit shows 0 to 10, as on the circuits page
+    for (int m = 0; m <= 10; m += 2)
     {
-        if (m < lo || m > hi) continue;
-        const float a = juce::degreesToRadians (a0 + (float) ((m - lo) / (hi - lo)) * (a1 - a0));
+        const float a = juce::degreesToRadians (a0 + m / 10.0f * (a1 - a0));
         const juce::Point<float> p (c.x + 101 * s * std::sin (a), c.y - 101 * s * std::cos (a));
         g.setColour (ink);
-        g.drawText (m == 0 ? juce::String ("U") : (m > 0 ? "+" : "") + juce::String (m),
-                    juce::Rectangle<float> (40 * s, 18 * s).withCentre (p), juce::Justification::centred);
+        g.drawText (juce::String (m), juce::Rectangle<float> (40 * s, 18 * s).withCentre (p), juce::Justification::centred);
     }
 
     disc (70, accent);
