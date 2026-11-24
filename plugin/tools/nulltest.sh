@@ -22,3 +22,17 @@ for wav in "$repo"/samples/*.wav; do
     printf '%-16s %-6s 0.1->0.8   ' "$name" "$q"; node "$here/compare.js" "$tmp/js.f32" "$tmp/vst.f32"
   done
 done
+# the colour circuits: 4x in High, 2x in the other Quality settings (Drive values a float holds exactly)
+for wav in "$repo"/samples/*.wav; do
+  name=$(basename "$wav" .wav)
+  for c in ts808 fuzz tweed; do
+    for q in high normal; do
+      os=4; [ $q = high ] || os=2
+      for d in 0 0.25 0.5 0.75 1; do
+        sr=$(CIRCUIT=$c node "$here/jsrender.js" "$wav" "$tmp/in.f32" "$tmp/js.f32" $d $os 512)
+        CIRCUIT=$c QUALITY=$q "$host" "$tmp/in.f32" "$tmp/vst.f32" $sr $d 512 2>/dev/null
+        printf '%-16s %-6s %-6s drive %-4s  ' "$name" $c $q "$d"; node "$here/compare.js" "$tmp/js.f32" "$tmp/vst.f32"
+      done
+    done
+  done
+done

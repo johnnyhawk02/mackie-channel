@@ -17,9 +17,11 @@ add_subdirectory(${JUCE_DIR} juce)
 
 # The circuit core rounds like JS only without fused multiply-adds
 # (JsMath.cpp sets its own contraction with a pragma).
-add_library(MackieCore STATIC Source/MackieChannelCore.cpp Source/JsMath.cpp)
+add_library(MackieCore STATIC Source/MackieChannelCore.cpp Source/ColourCircuitsCore.cpp Source/JsMath.cpp)
 target_compile_options(MackieCore PRIVATE -O3 -ffp-contract=off -fno-fast-math)
 target_include_directories(MackieCore PUBLIC Source)
+# the plugin is a shared library, so the core it links in must be position independent
+set_target_properties(MackieCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 juce_add_plugin(Colourbox
     VERSION 1.0.0

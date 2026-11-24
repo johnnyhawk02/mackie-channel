@@ -2,6 +2,7 @@
 // test against the JS model (see nulltest.sh).
 //   vst3null in.f32 out.f32 <sampleRate> <drive> [block=512] [drive2 at-sample]
 // QUALITY=lite|eco|normal|high (default high) sets the Quality choice.
+// CIRCUIT=mackie|ts808|fuzz|tweed (default mackie) sets the Circuit choice.
 // The mono input goes to both channels of a stereo bus; the output is channel 1
 // with the reported latency trimmed off.
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -41,6 +42,13 @@ int main (int argc, char** argv)
         const int qi = names.indexOf (qn);
         if (qi < 0) { std::fprintf (stderr, "unknown QUALITY %s\n", qn); return 1; }
         plugin->getParameters()[1]->setValue ((float) qi / 3.0f);
+    }
+    if (const char* cn = std::getenv ("CIRCUIT"))
+    {
+        const juce::StringArray names { "mackie", "ts808", "fuzz", "tweed" };
+        const int ci = names.indexOf (cn);
+        if (ci < 0) { std::fprintf (stderr, "unknown CIRCUIT %s\n", cn); return 1; }
+        plugin->getParameters()[2]->setValue ((float) ci / 3.0f);
     }
     plugin->prepareToPlay (sr, block);
     const int latency = plugin->getLatencySamples();

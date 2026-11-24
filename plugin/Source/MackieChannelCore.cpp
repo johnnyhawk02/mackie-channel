@@ -62,6 +62,10 @@ void Netlist::Q (const std::string& c, const std::string& b, const std::string& 
 {
     Element e { Element::Q }; e.c = c; e.b = b; e.e = e_; e.qm = m; els.push_back (std::move (e));
 }
+void Netlist::TRI (const std::string& plate, const std::string& grid, const std::string& cathode, const TriodeModel& m)
+{
+    Element e { Element::TRI }; e.c = plate; e.b = grid; e.e = cathode; e.tm = m; els.push_back (std::move (e));
+}
 void Netlist::U (const std::string& name, const std::string& inP, const std::string& inN, const std::string& out,
                  const OpAmpModel& M, double vcc, double vee)
 {
@@ -186,11 +190,19 @@ Circuit::Circuit (std::shared_ptr<Netlist> net_, double T_, int fineLevels, bool
         }
         else if (e.k == Element::Q)
         {
-            // pnp only in this circuit: port1 = EB, port2 = CB
+            // port1 = BE junction, port2 = BC junction, oriented forward for the polarity
             const int Bn = node (e.b), Cn = node (e.c), En = node (e.e);
             devs.push_back ({ Dev::Qd, (int) ports.size(), &e });
-            ports.push_back ({ En, Bn, En, Bn });
-            ports.push_back ({ Cn, Bn, Cn, Bn });
+            if (e.qm.npn) { ports.push_back ({ Bn, En, Bn, En }); ports.push_back ({ Bn, Cn, Bn, Cn }); }
+            else { ports.push_back ({ En, Bn, En, Bn }); ports.push_back ({ Cn, Bn, Cn, Bn }); }
+        }
+        else if (e.k == Element::TRI)
+        {
+            // port1 = grid-cathode (grid current), port2 = plate-cathode (plate current)
+            const int G = node (e.b), P = node (e.c), Kn = node (e.e);
+            devs.push_back ({ Dev::TRId, (int) ports.size(), &e });
+            ports.push_back ({ G, Kn, G, Kn });
+            ports.push_back ({ P, Kn, P, Kn });
         }
         else if (e.k == Element::CLAMP)
         {
@@ -211,13 +223,15 @@ Circuit::Circuit (std::shared_ptr<Netlist> net_, double T_, int fineLevels, bool
         if (d.k == Dev::Qd) { QA.insert (QA.end(), { (double) d.p, d.el->qm.Is, d.el->qm.Bf, d.el->qm.Br, d.el->qm.Vaf }); lim[d.p] = 1; lim[d.p + 1] = 1; }
         else if (d.k == Dev::Dd) { DA.insert (DA.end(), { (double) d.p, d.el->dm.Is, d.el->dm.N * VT }); lim[d.p] = 2; }
         else if (d.k == Dev::RVd) RVs.push_back (d);
+        else if (d.k == Dev::TRId) { const TriodeModel& M = d.el->tm; TA.insert (TA.end(), { (double) d.p, M.mu, M.ex, M.kg1, M.kp, M.kvb, M.rgk, M.vg0, M.gw }); lim[d.p] = 4; }
         else { CA.insert (CA.end(), { (double) d.p, d.el->hi, d.el->lo }); lim[d.p] = 3; }
     }
-    clampsOnly = QA.empty() && DA.empty() && RVs.empty();
+    clampsOnly = QA.empty() && TA.empty() && DA.empty() && RVs.empty();
     RVg.assign (RVs.size(), 0.0);
     limA.assign (ports.size(), 0.0); limB.assign (ports.size(), 0.0);
     for (auto& d : devs)
     {
+        if (d.k == Dev::TRId) limA[d.p] = d.el->tm.vg0;
         if (d.k == Dev::Dd) limA[d.p] = d.el->dm.N * VT;
         if (d.k == Dev::CL) { limA[d.p] = d.el->hi; limB[d.p] = d.el->lo; }
     }
@@ -342,6 +356,26 @@ void Circuit::evalDevices()
         dI[2 * pp] = dic1 + gf / Bf; dI[2 * pp + 1] = dic2 + gr / Br;
         dI[2 * pp + 2] = -dic1; dI[2 * pp + 3] = -dic2;
     }
+    // triodes (Koren plate current, smooth grid-conduction diode):
+    // packed [p, mu, ex, kg1, kp, kvb, rgk, vg0, gw]
+    for (size_t n = 0; n < TA.size(); n += 9)
+    {
+        const int pp = (int) TA[n]; const double mu = TA[n + 1], ex = TA[n + 2], kg1 = TA[n + 3], kp = TA[n + 4], kvb = TA[n + 5];
+        const double rgk = TA[n + 6], vg0 = TA[n + 7], gw = TA[n + 8];
+        const double vg = v[pp], vp = v[pp + 1];
+        const double zg = (vg - vg0) / gw;
+        i[pp] = gw / rgk * softplus (zg); dI[2 * pp] = sigmoid (zg) / rgk + 1e-12; dI[2 * pp + 1] = 0;
+        const double s = std::sqrt (kvb + vp * vp), zk = kp * (1 / mu + vg / s), Lz = softplus (zk), sz = sigmoid (zk);
+        const double e1 = vp * Lz / kp;
+        if (e1 > 0)
+        {
+            const double pw = jsmath::pow (e1, ex - 1), k2 = 2 / kg1;
+            i[pp + 1] = k2 * pw * e1;
+            const double dE1g = vp * sz / s, dE1p = Lz / kp - vp * vp * vg * sz / (s * s * s);
+            dI[2 * pp + 2] = k2 * ex * pw * dE1g + 0; dI[2 * pp + 3] = k2 * ex * pw * dE1p + 1e-12;
+        }
+        else { i[pp + 1] = 0; dI[2 * pp + 2] = 0; dI[2 * pp + 3] = 1e-12; }
+    }
     // diodes: packed [p, Is, nVt]
     for (size_t n = 0; n < DA.size(); n += 3)
     {
@@ -382,7 +416,7 @@ void Circuit::factor()
     for (int k = 0; k < m; k++) jac[k * m + k] = 1;
     for (auto& d : devs)
     {
-        const int p0 = d.p, w = d.k == Dev::Qd ? 2 : 1;
+        const int p0 = d.p, w = d.k == Dev::Qd || d.k == Dev::TRId ? 2 : 1;
         for (int a = 0; a < w; a++) for (int b = 0; b < w; b++)
         {
             const double g = dI[2 * (p0 + b) + a]; if (g == 0) continue;
@@ -434,6 +468,11 @@ bool Circuit::solve (const double* u, int maxIt)
                 i[pp] += dI[2 * pp] * a1 + dI[2 * pp + 1] * a2; i[pp + 1] += dI[2 * pp + 2] * a1 + dI[2 * pp + 3] * a2;
             }
             for (size_t n = 0; n < DA.size(); n += 3) { const int pp = (int) DA[n]; i[pp] += dI[2 * pp] * dx[pp]; }
+            for (size_t n = 0; n < TA.size(); n += 9)
+            {
+                const int pp = (int) TA[n]; const double a1 = dx[pp], a2 = dx[pp + 1];
+                i[pp] += dI[2 * pp] * a1; i[pp + 1] += dI[2 * pp + 2] * a1 + dI[2 * pp + 3] * a2;
+            }
             for (size_t n = 0; n < CA.size(); n += 3) { const int pp = (int) CA[n]; i[pp] += dI[2 * pp] * dx[pp]; }
             for (size_t n = 0; n < RVs.size(); n++) { const int pp = RVs[n].p; i[pp] += dI[2 * pp] * dx[pp]; }
             ok = true; break;
@@ -449,6 +488,11 @@ bool Circuit::solve (const double* u, int maxIt)
                 const int t = lim[k];
                 if (t == 1) nv = pnjlim (nv, v0[k], VT, 0.6);
                 else if (t == 2) nv = pnjlim (nv, v0[k], limA[k], 0.6);
+                else if (t == 4) // grid entering conduction: at most 0.25 V a step
+                {
+                    const double top = std::max (v0[k], limA[k]);
+                    if (nv > top + 0.25) nv = top + 0.25;
+                }
                 else if (t == 3) // entering the clamp: stop at the knee
                 {
                     const double hi = limA[k], lo = limB[k];

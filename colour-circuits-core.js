@@ -561,7 +561,8 @@
       let a = 0; for (let k = 0; k < N; k++) a += h[k] * this.downBuf[this.downPos + N - k];
       return a;
     }
-    get latency() { return this.factor === 1 ? 0 : (this.taps - 1) / this.factor; }
+    // up and down filters together delay by taps - factor fast samples: tpp - 1 at the base rate
+    get latency() { return this.factor === 1 ? 0 : this.tpp - 1; }
   }
 
 

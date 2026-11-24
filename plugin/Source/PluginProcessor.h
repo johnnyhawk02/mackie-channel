@@ -2,13 +2,26 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "MackieChannelCore.h"
+#include "ColourCircuitsCore.h"
 #include <memory>
 #include <vector>
 
-// One input channel of a CR1604-VLZ as an overdrive, with the Drive knob as its
-// TRIM. The sound is MackieChannel from MackieChannelCore (the C++ twin of
-// mackie-channel-core.js). The Quality choice picks the core's preset: High is
-// 4x oversampling like tools/render.js; Normal, Eco and Lite trade accuracy for CPU.
+// One Drive knob in front of a choice of circuits. The Circuit choice picks the
+// Mackie CR1604-VLZ channel (MackieChannel, the C++ twin of mackie-channel-core.js)
+// or one of the colour circuits (ColourCircuit, the twin of colour-circuits-core.js):
+// Tube Screamer, Fuzz Face, tweed Champ preamp. The Quality choice picks the Mackie
+// core's preset (High is 4x oversampling like tools/render.js); for the colour
+// circuits High runs them at 4x and the other settings at 2x.
+
+// The circuit the audio thread runs, whichever kind it is.
+struct ColourboxVoice
+{
+    virtual ~ColourboxVoice() = default;
+    virtual void setDrive (double drive) = 0;
+    virtual void process (const float* in, float* out, int n) = 0;
+    virtual double latencySamples() const = 0;
+};
+
 class ColourboxProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
@@ -43,28 +56,32 @@ public:
 
     // Channel gain at a Drive rotation, line input (the web page's readout and knob scale).
     static double channelGainDb (double drive);
+    static const juce::StringArray circuitNames;
+    int circuitIndex() const { return circuitParam == nullptr ? 0 : juce::jlimit (0, 3, (int) circuitParam->load()); }
 
     juce::AudioProcessorValueTreeState apvts;
 
 private:
-    static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    static juce::AudioProcessorValueTreeState::ParameterLayout createLayout (ColourboxProcessor* self);
+    static ColourboxVoice* makeVoice (double rate, int circuit, int quality, double drive);
 
     void timerCallback() override;
     int qualityIndex() const { return juce::jlimit (0, 3, (int) qualityParam->load()); }
 
     std::atomic<float>* driveParam = nullptr;
     std::atomic<float>* qualityParam = nullptr;
-    std::unique_ptr<mackie::MackieChannel> channel;
-    mackie::Options options;
+    std::atomic<float>* circuitParam = nullptr;
+    std::unique_ptr<ColourboxVoice> channel;
+    double drive = 0;
     std::vector<float> mono, wet, wetOld;
     double rate = 0;
 
-    // A Quality change builds a new channel on the message thread (timer), hands it
-    // to the audio thread, which crossfades from the old one and hands that back.
-    int builtQuality = -1;                                   // message thread
-    std::atomic<mackie::MackieChannel*> incoming { nullptr }; // message -> audio
-    std::atomic<mackie::MackieChannel*> retired { nullptr };  // audio -> message
-    std::unique_ptr<mackie::MackieChannel> fadingOut;        // audio thread
+    // A Circuit or Quality change builds a new voice on the message thread (timer),
+    // hands it to the audio thread, which crossfades from the old one and hands that back.
+    int builtQuality = -1, builtCircuit = -1;                // message thread
+    std::atomic<ColourboxVoice*> incoming { nullptr };      // message -> audio
+    std::atomic<ColourboxVoice*> retired { nullptr };       // audio -> message
+    std::unique_ptr<ColourboxVoice> fadingOut;              // audio thread
     int fadePos = 0, fadeLen = 1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ColourboxProcessor)

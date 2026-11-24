@@ -7,10 +7,41 @@ ColourboxProcessor::ColourboxProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "VLZ", createLayout())
+      apvts (*this, nullptr, "VLZ", createLayout (this))
 {
     driveParam = apvts.getRawParameterValue ("drive");
     qualityParam = apvts.getRawParameterValue ("quality");
+    circuitParam = apvts.getRawParameterValue ("circuit");
+}
+
+const juce::StringArray ColourboxProcessor::circuitNames { "Mackie", "Tube Screamer", "Fuzz Face", "Tweed Champ" };
+
+namespace
+{
+    struct MackieVoice : ColourboxVoice
+    {
+        mackie::Options o; std::unique_ptr<mackie::MackieChannel> ch;
+        MackieVoice (double rate, int quality, double drive) { o.drive = drive; o.quality = quality; ch = std::make_unique<mackie::MackieChannel> (rate, o); }
+        void setDrive (double d) override { o.drive = d; ch->setParams (o); }
+        void process (const float* in, float* out, int n) override { ch->process (in, out, n); }
+        double latencySamples() const override { return ch->latencySamples(); }
+    };
+    struct ColourVoice : ColourboxVoice
+    {
+        mackie::ColourCircuit::Settings s; std::unique_ptr<mackie::ColourCircuit> ch;
+        ColourVoice (double rate, int model, int os, double drive) { s.model = model; s.oversample = os; s.drive = drive; ch = std::make_unique<mackie::ColourCircuit> (rate, s); }
+        void setDrive (double d) override { s.drive = d; ch->setParams (s); }
+        void process (const float* in, float* out, int n) override { ch->process (in, out, n); }
+        double latencySamples() const override { return ch->latencySamples(); }
+    };
+}
+
+// circuit: choice index (0 Mackie, then the colour circuits); quality: choice index (Lite, Eco, Normal, High)
+ColourboxVoice* ColourboxProcessor::makeVoice (double rate, int circuit, int quality, double drive)
+{
+    if (circuit == 0) return new MackieVoice (rate, qualityPreset[quality], drive);
+    // every setting keeps the 15-sample latency: 4x at High, 2x below it
+    return new ColourVoice (rate, circuit - 1, quality == 3 ? 4 : 2, drive);
 }
 
 ColourboxProcessor::~ColourboxProcessor()
@@ -30,20 +61,25 @@ double ColourboxProcessor::channelGainDb (double drive)
     return 20 * std::log10 (pad * gd * 5110 / 10000);
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout ColourboxProcessor::createLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout ColourboxProcessor::createLayout (ColourboxProcessor* self)
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "drive", 1 }, "Drive", juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f,
         juce::AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([] (float v, int)
+            .withStringFromValueFunction ([self] (float v, int)
             {
+                // the colour circuits show the knob's 0-10 scale; the Mackie its channel gain
+                if (self->circuitIndex() != 0) return juce::String (v * 10.0f, 1);
                 const double db = channelGainDb (v);
                 return (db >= 0 ? "+" : "-") + juce::String (std::abs (db), 1) + " dB";
             })));
     // added after Drive: sessions saved before it load as High, the sound they had
     layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "quality", 1 }, "Quality", juce::StringArray { "Lite", "Eco", "Normal", "High" }, 3));
+    // added after Quality: sessions saved before it load as the Mackie
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "circuit", 1 }, "Circuit", circuitNames, 0));
     return layout;
 }
 
@@ -63,14 +99,13 @@ void ColourboxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fadingOut.reset();
     // a fresh channel settles to its operating point at the current Drive (no glide)
     rate = sampleRate;
-    builtQuality = qualityIndex();
-    options.drive = driveParam->load();
-    options.quality = qualityPreset[builtQuality];
-    channel = std::make_unique<mackie::MackieChannel> (sampleRate, options);
+    builtQuality = qualityIndex(); builtCircuit = circuitIndex();
+    drive = driveParam->load();
+    channel.reset (makeVoice (sampleRate, builtCircuit, builtQuality, drive));
     mono.assign ((size_t) juce::jmax (1, samplesPerBlock), 0.0f);
     wet.assign (mono.size(), 0.0f); wetOld.assign (mono.size(), 0.0f);
-    fadeLen = juce::jmax (1, (int) (0.02 * sampleRate)); // 20 ms crossfade on a Quality change
-    // every preset has the same latency (15 samples), so a Quality change does not move it
+    fadeLen = juce::jmax (1, (int) (0.02 * sampleRate)); // 20 ms crossfade on a Circuit or Quality change
+    // every circuit and preset has the same latency (15 samples), so a change does not move it
     setLatencySamples ((int) std::ceil (channel->latencySamples()));
     startTimerHz (20);
 }
@@ -78,12 +113,10 @@ void ColourboxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 void ColourboxProcessor::timerCallback()
 {
     delete retired.exchange (nullptr);
-    const int qi = qualityIndex();
-    if (qi == builtQuality || rate <= 0 || incoming.load() != nullptr) return;
-    mackie::Options o;
-    o.drive = driveParam->load(); o.quality = qualityPreset[qi];
-    auto* fresh = new mackie::MackieChannel (rate, o); // settles here, off the audio thread
-    builtQuality = qi;
+    const int qi = qualityIndex(), ci = circuitIndex();
+    if ((qi == builtQuality && ci == builtCircuit) || rate <= 0 || incoming.load() != nullptr) return;
+    auto* fresh = makeVoice (rate, ci, qi, driveParam->load()); // settles here, off the audio thread
+    builtQuality = qi; builtCircuit = ci;
     delete incoming.exchange (fresh);
 }
 
@@ -95,21 +128,21 @@ void ColourboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (channel == nullptr || numIn == 0) { buffer.clear(); return; }
 
     // the knob is read once per block and glides inside the core, as in the web page
-    const double drive = (double) driveParam->load();
-    if (drive != options.drive)
+    const double d = (double) driveParam->load();
+    if (d != drive)
     {
-        options.drive = drive;
-        channel->setParams (options);
-        if (fadingOut) fadingOut->setParams (options);
+        drive = d;
+        channel->setDrive (drive);
+        if (fadingOut) fadingOut->setDrive (drive);
     }
 
-    // a channel built for a new Quality: crossfade to it (unless a fade is still running)
+    // a voice built for a new Circuit or Quality: crossfade to it (unless a fade is still running)
     if (fadingOut == nullptr && retired.load() == nullptr)
         if (auto* fresh = incoming.exchange (nullptr))
         {
             fadingOut = std::move (channel);
             channel.reset (fresh);
-            channel->setParams (options); // the Drive may have moved since it was built
+            channel->setDrive (drive); // the Drive may have moved since it was built
             fadePos = 0;
         }
 

@@ -1,7 +1,9 @@
 // Core-only render: raw mono float32 in -> raw float32 out, the same steps as
 // tools/render.js (pad by the latency, trim it off). Optional drive automation:
 //   corerender in.f32 out.f32 <drive> [oversample=4 | lite | eco | normal | high] [block=128] [drive2 at-sample]
+// CIRCUIT=ts808|fuzz|tweed renders that colour circuit instead (oversample must be a number).
 #include "../Source/MackieChannelCore.h"
+#include "../Source/ColourCircuitsCore.h"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -19,6 +21,25 @@ int main (int argc, char** argv)
     const int block = argc > 5 ? std::atoi (argv[5]) : (int) x.size() + 64;
     const double drive2 = argc > 7 ? std::atof (argv[6]) : -1; const long at = argc > 7 ? std::atol (argv[7]) : -1;
     const double sr = std::getenv ("SR") ? std::atof (std::getenv ("SR")) : 44100;
+    const char* circuit = std::getenv ("CIRCUIT");
+    if (circuit != nullptr)
+    {
+        mackie::ColourCircuit::Settings cs; const std::string cn = circuit;
+        cs.model = cn == "fuzz" ? mackie::ColourCircuit::Fuzz : cn == "tweed" ? mackie::ColourCircuit::Tweed : mackie::ColourCircuit::TS808;
+        cs.drive = o.drive; cs.oversample = argc > 4 ? std::atoi (argv[4]) : 4;
+        mackie::ColourCircuit m (sr, cs);
+        const int tail = (int) std::ceil (m.latencySamples());
+        std::vector<float> xx (x.size() + tail, 0.0f), yy (x.size() + tail, 0.0f);
+        std::copy (x.begin(), x.end(), xx.begin());
+        for (size_t s = 0; s < xx.size(); s += block)
+        {
+            if (at >= 0 && (long) s >= at) { cs.drive = drive2; m.setParams (cs); }
+            const int n = (int) std::min ((size_t) block, xx.size() - s);
+            m.process (xx.data() + s, yy.data() + s, n);
+        }
+        FILE* fo = std::fopen (argv[2], "wb"); std::fwrite (yy.data() + tail, 4, x.size(), fo); std::fclose (fo);
+        return 0;
+    }
     mackie::MackieChannel m (sr, o);
     const int tail = (int) std::ceil (m.latencySamples());
     std::vector<float> xx (x.size() + tail, 0.0f), yy (x.size() + tail, 0.0f);

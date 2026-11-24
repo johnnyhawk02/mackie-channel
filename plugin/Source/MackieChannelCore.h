@@ -21,16 +21,18 @@
 namespace mackie
 {
 
-struct BjtModel { double Is, Bf, Br, Vaf; };
+struct BjtModel { double Is, Bf, Br, Vaf; bool npn = false; };
 struct DiodeModel { double Is, N; };
 struct OpAmpModel { double gbw, sr, a0, headroom, cc, rout; };
+// triode: Koren plate current plus a smooth grid-conduction diode (colour circuits)
+struct TriodeModel { double mu, ex, kg1, kp, kvb, rgk, vg0, gw; };
 
 // ============================================================================
 // Netlist
 // ============================================================================
 struct Element
 {
-    enum Kind { R, RV, C, L, V, D, Q, GM, CLAMP, BUF } k;
+    enum Kind { R, RV, C, L, V, D, Q, GM, CLAMP, BUF, TRI } k;
     // node names; empty = not used by this element
     std::string a, b, c, e, p, n, x, o;
     double r = 0;                    // R (when rf is empty)
@@ -39,6 +41,7 @@ struct Element
     int idx = 0;                     // V
     DiodeModel dm {};                // D
     BjtModel qm {};                  // Q
+    TriodeModel tm {};               // TRI (plate c, grid b, cathode e)
     double gm = 0;                   // GM
     double hi = 0, lo = 0;           // CLAMP
     double g = 0;                    // BUF
@@ -59,6 +62,7 @@ struct Netlist
     void V (const std::string& name, const std::string& a);
     void D (const std::string& a, const std::string& b, const DiodeModel& m);
     void Q (const std::string& c, const std::string& b, const std::string& e, const BjtModel& m);
+    void TRI (const std::string& plate, const std::string& grid, const std::string& cathode, const TriodeModel& m);
     void U (const std::string& name, const std::string& inP, const std::string& inN, const std::string& out,
             const OpAmpModel& m, double vcc, double vee);
     void out (const std::string& name, const std::string& node);
@@ -88,7 +92,7 @@ public:
 
 private:
     struct Port { int va, vb, ia, ib; };
-    struct Dev { enum { Dd, Qd, CL, RVd } k; int p; Element* el; };
+    struct Dev { enum { Dd, Qd, CL, RVd, TRId } k; int p; Element* el; };
     struct Reac { int a, b; bool isC; double val; bool be; double g; };
     // row-compressed side-by-side dense blocks over z = [J, u, i], exact zeros dropped
     struct Sparse { std::vector<int> ptr, col; std::vector<double> val; int rows = 0; };
@@ -113,7 +117,7 @@ private:
     std::vector<Port> ports;
     std::vector<Dev> devs;
     std::vector<Reac> reac;
-    std::vector<double> QA, DA, CA, RVg, limA, limB;
+    std::vector<double> QA, TA, DA, CA, RVg, limA, limB;
     std::vector<Dev> RVs;
     std::vector<signed char> lim;
     bool clampsOnly = false;
