@@ -24,7 +24,7 @@ cmake --build plugin/build --target vst3null -j8
 plugin/tools/nulltest.sh
 ```
 
-For each bass sample in `samples/`, in each Quality setting, at Drive 0, 0.15, 0.3, 0.6 and 1, and with Drive moved from 0.1 to 0.8 partway through, it renders the JS core to raw float32 (`tools/jsrender.js`). It runs the installed VST3 through a host (`tools/vst3null.cpp`) and prints the residual. Every case is bit-identical: the residual is −inf and 100% of samples match.
+For each bass sample in `samples/`, in each Quality setting, at Drive 0, 0.15, 0.3, 0.6 and 1, and with Drive moved from 0.1 to 0.8 partway through, it renders the JS core to raw float32 (`tools/jsrender.js`). It runs the installed VST3 through a host (`tools/vst3null.cpp`) and prints the residual. Every case is bit-identical (residual −inf, 100% of samples match) when built on Linux x86-64. On the Mac (arm64), High, Eco and Lite are bit-identical too, but Normal differs by a residual peak of −97 dBFS at worst (−118 to −170 dBFS in most cases, 97–100% of samples identical). The cause is not found yet. It is not the 2x filter taps (they now come from the JS as a table) and it is far below hearing: Normal stops Newton at 0.1 µV, so a one-bit difference anywhere can change when an iteration stops.
 
 A host parameter is a 32-bit float, so the plugin sees Drive 0.3 as 0.30000001. `jsrender.js` rounds Drive the same way. The committed 16-bit renders in `renders/` use the exact double 0.3. Against those, the VST3 differs by 1 LSB on a few dozen samples per file, which comes from that rounding.
 
