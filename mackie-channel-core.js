@@ -731,6 +731,7 @@
     normal: { os: 3, tol: 1e-16 },
     eco: { os: 2, tol: 1e-16 },
     lite: { os: 4, tol: 1e-16, lite: true }, // no circuit solve: see _processLite
+    lite2: { os: 4, tol: 1e-16, lite: true, lite2: true }, // experimental: the gain leg's current limit (see _processLite)
   };
   const DEFAULTS = {
     drive: 0.3,            // TRIM rotation 0..1
@@ -750,7 +751,7 @@
       // quality preset (QUALITY below); without one, opts.oversample at full precision
       const Q = QUALITY[opts.quality] || { os: opts.oversample || 1, tol: 1e-18 };
       this.quality = QUALITY[opts.quality] ? opts.quality : null;
-      this.os = Q.os; this.tol = Q.tol; this.lite = !!Q.lite;
+      this.os = Q.os; this.tol = Q.tol; this.lite = !!Q.lite; this.lite2 = !!Q.lite2;
       this.T = 1 / (this.fs * this.os); // the circuit runs at fs * os
       this.ovs = new Oversampler(this.os);
       this.p = Object.assign({}, DEFAULTS);
@@ -914,8 +915,26 @@
             if (this.p.autoLevel) this.outGain = this.outGainBase * autoLevelGain(d);
           }
           const v = up[k];
-          vc = (vc + kc * v / rg) / (1 + kc / rg);      // C1, backward Euler
-          let d = (RFB / 10000) * (v + 2 * RFB * (v - vc) / rg);
+          let d;
+          if (this.lite2) {
+            // lite2: the parts interact. The gain-leg current i (through TRIM and C1) can
+            // only be fed by the servo amps and the current sources: once a servo hits its
+            // rail and the input transistor cuts off, i stops at ISRC + (L - |v|) / RFB.
+            // C1 then charges with that limited current, so heavy notes shift the bias
+            // and the clip recovers unevenly. Then each servo and U33A clips on its own.
+            const vl = (vc + kc * v / rg) / (1 + kc / rg);
+            let i = (v - vl) / rg;
+            const im = ISRC + (L - Math.abs(v)) / RFB;
+            if (i > im) i = im; else if (i < -im) i = -im;
+            vc = (i === (v - vl) / rg) ? vl : vc + kc * i;
+            let oh = v + RFB * i, oc = -RFB * i;
+            if (oh > L) oh = L; else if (oh < -L) oh = -L;
+            if (oc > L) oc = L; else if (oc < -L) oc = -L;
+            d = (RFB / 10000) * (oh - oc);
+          } else {
+            vc = (vc + kc * v / rg) / (1 + kc / rg);      // C1, backward Euler
+            d = (RFB / 10000) * (v + 2 * RFB * (v - vc) / rg);
+          }
           if (d > L) d = L; else if (d < -L) d = -L;
           const ad = Math.abs(d); if (ad > pmax) pmax = ad;
           buf[k] = d;
@@ -930,6 +949,7 @@
   }
   const LINE_PAD = (1 / (1 / 1500 + 1 / 6810)) / (5620 + 1 / (1 / 1500 + 1 / 6810)); // R220 into R197 || R523
   const LITE_TRIM = Math.pow(10, -0.3 / 20);
+  const ISRC = 1.4e-3; // Q64/Q80 current sources: (VCC - BIAS - Vbe) / R427
 
   // swing limits per stage, for meters
   const LIMITS = {
