@@ -97,25 +97,30 @@ static double pnjlim (double vnew, double vold, double vt, double vcrit)
     return vnew;
 }
 
-static void luFactor (double* A, int n, int* perm) // in place, partial pivoting
+// LU with partial pivoting, stored column-major (A[c*n + r] is row r, column c) so the
+// inner loops run over contiguous memory and vectorise. The back substitution goes a
+// column at a time (no long dependency chain); the JS luSolve uses the same order.
+static void luFactor (double* A, int n, int* perm)
 {
     for (int i = 0; i < n; i++) perm[i] = i;
     for (int c = 0; c < n; c++)
     {
-        int p = c; double best = std::abs (A[c * n + c]);
-        for (int r = c + 1; r < n; r++) { const double v = std::abs (A[r * n + c]); if (v > best) { best = v; p = r; } }
+        double* Ac = A + c * n;
+        int p = c; double best = std::abs (Ac[c]);
+        for (int r = c + 1; r < n; r++) { const double v = std::abs (Ac[r]); if (v > best) { best = v; p = r; } }
         if (p != c)
         {
-            for (int j = 0; j < n; j++) { const double t = A[c * n + j]; A[c * n + j] = A[p * n + j]; A[p * n + j] = t; }
+            for (int j = 0; j < n; j++) { const double t = A[j * n + c]; A[j * n + c] = A[j * n + p]; A[j * n + p] = t; }
             const int t = perm[c]; perm[c] = perm[p]; perm[p] = t;
         }
-        double d = A[c * n + c];
+        double d = Ac[c];
         if (d == 0 || std::isnan (d)) d = 1e-30; // JS: A[c*n+c] || 1e-30
-        A[c * n + c] = d;
-        for (int r = c + 1; r < n; r++)
+        Ac[c] = d;
+        for (int r = c + 1; r < n; r++) Ac[r] = Ac[r] / d;
+        for (int j = c + 1; j < n; j++)
         {
-            const double f = A[r * n + c] / d; A[r * n + c] = f; if (f == 0) continue;
-            for (int j = c + 1; j < n; j++) A[r * n + j] -= f * A[c * n + j];
+            double* Aj = A + j * n; const double x = Aj[c];
+            for (int r = c + 1; r < n; r++) Aj[r] -= Ac[r] * x;
         }
     }
 }
@@ -124,8 +129,8 @@ static void luSolve (const double* A, double* b, int n, const int* perm)
 {
     double y[256];
     for (int i = 0; i < n; i++) y[i] = b[perm[i]];
-    for (int i = 0; i < n; i++) { double s = y[i]; for (int j = 0; j < i; j++) s -= A[i * n + j] * y[j]; y[i] = s; }
-    for (int i = n - 1; i >= 0; i--) { double s = y[i]; for (int j = i + 1; j < n; j++) s -= A[i * n + j] * y[j]; y[i] = s / A[i * n + i]; }
+    for (int j = 0; j < n; j++) { const double yj = y[j]; const double* Aj = A + j * n; for (int i = j + 1; i < n; i++) y[i] -= Aj[i] * yj; }
+    for (int j = n - 1; j >= 0; j--) { const double* Aj = A + j * n; const double yj = y[j] / Aj[j]; y[j] = yj; for (int i = 0; i < j; i++) y[i] -= Aj[i] * yj; }
     for (int i = 0; i < n; i++) b[i] = y[i];
 }
 
@@ -300,6 +305,7 @@ void Circuit::setT (double T_)
         }
     };
     build (m, Dh.data(), Du.data(), K.data(), [&] (int k, double* t) { rowDiff (ports[k].va, ports[k].vb, t); });
+    KT.assign (m * m, 0); for (int k = 0; k < m; k++) for (int j = 0; j < m; j++) KT[j * m + k] = K[k * m + j];
     build (r, Ah.data(), Au.data(), Ai.data(), [&] (int k, double* t) { rowDiff (reac[k].a, reac[k].b, t); });
     build (o, Oh.data(), Ou.data(), Oi.data(), [&] (int k, double* t) { rowDiff (outNodes[k], -1, t); });
     // the same products with the exact zeros left out, summed in the same order
@@ -399,13 +405,16 @@ void Circuit::evalDevices()
 double Circuit::residual (double* fo)
 {
     evalDevices();
-    double nrm = 0;
-    for (int k = 0; k < m; k++)
+    // K i, a column at a time (the same sums in the same order as row by row)
+    double s[256];
+    for (int k = 0; k < m; k++) s[k] = 0;
+    for (int j = 0; j < m; j++)
     {
-        double s = 0; const int row = k * m;
-        for (int j = 0; j < m; j++) s += K[row + j] * i[j];
-        const double rr = v[k] - p[k] - s; fo[k] = rr; nrm += rr * rr;
+        const double ij = i[j]; const double* Kj = KT.data() + j * m;
+        for (int k = 0; k < m; k++) s[k] += Kj[k] * ij;
     }
+    double nrm = 0;
+    for (int k = 0; k < m; k++) { const double rr = v[k] - p[k] - s[k]; fo[k] = rr; nrm += rr * rr; }
     return nrm;
 }
 
@@ -413,7 +422,7 @@ double Circuit::residual (double* fo)
 void Circuit::factor()
 {
     std::fill (jac.begin(), jac.end(), 0.0);
-    for (int k = 0; k < m; k++) jac[k * m + k] = 1;
+    for (int k = 0; k < m; k++) jac[k * m + k] = 1; // column-major, see luFactor
     for (auto& d : devs)
     {
         const int p0 = d.p, w = d.k == Dev::Qd || d.k == Dev::TRId ? 2 : 1;
@@ -421,7 +430,8 @@ void Circuit::factor()
         {
             const double g = dI[2 * (p0 + b) + a]; if (g == 0) continue;
             const int c = p0 + a, col = p0 + b;
-            for (int k = 0; k < m; k++) jac[k * m + c] -= K[k * m + col] * g;
+            double* Jc = jac.data() + c * m; const double* Kc = KT.data() + col * m;
+            for (int k = 0; k < m; k++) Jc[k] -= Kc[k] * g;
         }
     }
     luFactor (jac.data(), m, perm.data());
