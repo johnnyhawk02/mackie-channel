@@ -231,7 +231,8 @@ Circuit::Circuit (std::shared_ptr<Netlist> net_, double T_, int fineLevels, bool
     J.assign (r, 0); v.assign (m, 0); i.assign (m, 0); p.assign (m, 0); f.assign (m, 0); jac.assign (m * m, 0);
     dI.assign (m * 2, 0); dx.assign (m, 0); y.assign (o, 0); vr.assign (r, 0); perm.assign (m, 0);
     vtmp.assign (m, 0); ftmp.assign (m, 0); sx.assign (m, 0); physI.assign (r, 0); vSave.assign (m, 0);
-    uPrev.assign (q, 0); u0.assign (q, 0); ui.assign (q, 0);
+    uPrev.assign (q, 0); u0.assign (q, 0); ui.assign (q, 0); z.assign (r + q + m, 0);
+    for (Sparse* sp : { &sP, &sR, &sO }) { sp->ptr.reserve (std::max (m, std::max (r, o)) + 1); sp->col.reserve ((size_t) std::max (m, std::max (r, o)) * (r + q + m)); sp->val.reserve (sp->col.capacity()); }
     if (m > 256) throw std::runtime_error ("too many device ports");
 
     if (fineLevels > 0) fine = std::make_unique<Circuit> (net, T_, fineLevels - 1, false);
@@ -286,6 +287,36 @@ void Circuit::setT (double T_)
     build (m, Dh.data(), Du.data(), K.data(), [&] (int k, double* t) { rowDiff (ports[k].va, ports[k].vb, t); });
     build (r, Ah.data(), Au.data(), Ai.data(), [&] (int k, double* t) { rowDiff (reac[k].a, reac[k].b, t); });
     build (o, Oh.data(), Ou.data(), Oi.data(), [&] (int k, double* t) { rowDiff (outNodes[k], -1, t); });
+    // the same products with the exact zeros left out, summed in the same order
+    sparseRows (sP, m, { { Dh.data(), r }, { Du.data(), q } });
+    sparseRows (sR, r, { { Ah.data(), r }, { Au.data(), q }, { Ai.data(), m } });
+    sparseRows (sO, o, { { Oh.data(), r }, { Ou.data(), q }, { Oi.data(), m } });
+}
+
+void Circuit::sparseRows (Sparse& S, int rows, std::initializer_list<std::pair<const double*, int>> blocks)
+{
+    S.rows = rows; S.ptr.clear(); S.col.clear(); S.val.clear(); S.ptr.push_back (0);
+    for (int k = 0; k < rows; k++)
+    {
+        int off = 0;
+        for (const auto& b : blocks)
+        {
+            for (int j = 0; j < b.second; j++) { const double a = b.first[k * b.second + j]; if (a != 0) { S.col.push_back (off + j); S.val.push_back (a); } }
+            off += b.second;
+        }
+        S.ptr.push_back ((int) S.col.size());
+    }
+}
+
+void Circuit::sparseMul (const Sparse& S, const double* zz, double* out)
+{
+    const int* ptr = S.ptr.data(); const int* col = S.col.data(); const double* val = S.val.data();
+    for (int k = 0; k < S.rows; k++)
+    {
+        double s = 0;
+        for (int e = ptr[k], end = ptr[k + 1]; e < end; e++) s += val[e] * zz[col[e]];
+        out[k] = s;
+    }
 }
 
 // Evaluate device currents and their port derivatives at v.
@@ -365,13 +396,8 @@ void Circuit::factor()
 // Solve one time step for inputs u (see the JS for the method).
 bool Circuit::solve (const double* u, int maxIt)
 {
-    for (int k = 0; k < m; k++)
-    {
-        double s = 0;
-        for (int j = 0; j < r; j++) s += Dh[k * r + j] * J[j];
-        for (int j = 0; j < q; j++) s += Du[k * q + j] * u[j];
-        p[k] = s;
-    }
+    std::copy (J.begin(), J.end(), z.begin()); std::copy (u, u + q, z.begin() + r);
+    sparseMul (sP, z.data(), p.data());
     double* v0 = vtmp.data(); double* f1 = ftmp.data();
     // fast path for stages whose only devices are swing clamps
     if (clampsOnly)
@@ -386,7 +412,7 @@ bool Circuit::solve (const double* u, int maxIt)
     }
     residual (f.data());
     int it = 0; bool ok = false, fresh = false, haveDx = false; double ndx = 0;
-    const double tol = 1e-18 * m;
+    const double tolm = tol * m;
     for (; it < maxIt; it++)
     {
         if (! haveDx)
@@ -398,7 +424,7 @@ bool Circuit::solve (const double* u, int maxIt)
         }
         else fresh = false;
         haveDx = false;
-        if (ndx < tol) // apply the last (tiny) correction, currents updated to first order
+        if (ndx < tolm) // apply the last (tiny) correction, currents updated to first order
         {
             for (int k = 0; k < m; k++) v[k] += dx[k];
             for (size_t n = 0; n < QA.size(); n += 5)
@@ -434,7 +460,7 @@ bool Circuit::solve (const double* u, int maxIt)
             for (int k = 0; k < m; k++) sx[k] = -f1[k];
             luSolve (jac.data(), sx.data(), m, perm.data());
             ns = 0; for (int k = 0; k < m; k++) ns += sx[k] * sx[k];
-            if (ns < ndx * (1 - alpha / 4) || ns < tol) { accepted = true; contract = ns / ndx; break; }
+            if (ns < ndx * (1 - alpha / 4) || ns < tolm) { accepted = true; contract = ns / ndx; break; }
             alpha *= 0.5;
         }
         std::copy (f1, f1 + m, f.begin());
@@ -450,22 +476,9 @@ bool Circuit::solve (const double* u, int maxIt)
 // reactive branch voltages and currents, outputs, state update
 void Circuit::finish (const double* u)
 {
-    for (int k = 0; k < r; k++)
-    {
-        double s = 0;
-        for (int j = 0; j < r; j++) s += Ah[k * r + j] * J[j];
-        for (int j = 0; j < q; j++) s += Au[k * q + j] * u[j];
-        for (int j = 0; j < m; j++) s += Ai[k * m + j] * i[j];
-        vr[k] = s;
-    }
-    for (int k = 0; k < o; k++)
-    {
-        double s = 0;
-        for (int j = 0; j < r; j++) s += Oh[k * r + j] * J[j];
-        for (int j = 0; j < q; j++) s += Ou[k * q + j] * u[j];
-        for (int j = 0; j < m; j++) s += Oi[k * m + j] * i[j];
-        y[k] = s;
-    }
+    std::copy (J.begin(), J.end(), z.begin()); std::copy (u, u + q, z.begin() + r); std::copy (i.begin(), i.end(), z.begin() + r + q);
+    sparseMul (sR, z.data(), vr.data());
+    sparseMul (sO, z.data(), y.data());
     for (int k = 0; k < r; k++)
     {
         const Reac& re = reac[k]; const double g = re.g, vv = vr[k];
@@ -718,16 +731,31 @@ double Oversampler::down (const double* arr, int n)
 // ============================================================================
 Options::Options() : fullScaleVolts (0.7746 * jsmath::pow (10.0, 18.0 / 20) * 1.4142135623730951) {}
 
+// Quality presets, as QUALITY in the JS core: high 4x; normal 2x with the EQ
+// and fader at the base rate; eco 1x. Normal and eco stop Newton at 1e-7 V.
+static constexpr int QUALITY_LATENCY = 15;
+static int qualityOs (const Options& o)
+{
+    if (o.quality == Options::High || o.quality == Options::Lite) return 4;
+    if (o.quality == Options::Normal) return 2;
+    if (o.quality == Options::Eco) return 1;
+    return o.oversample > 0 ? o.oversample : 1;
+}
+
 MackieChannel::MackieChannel (double sampleRate, const Options& opts)
-    : fs (sampleRate), os (opts.oversample > 0 ? opts.oversample : 1), T (1 / (fs * os)), ovs (os), p (opts),
+    : fs (sampleRate), os (qualityOs (opts)), split (opts.quality == Options::Normal), lite (opts.quality == Options::Lite),
+      tol (opts.quality == Options::Normal || opts.quality == Options::Eco || opts.quality == Options::Lite ? 1e-14 : 1e-18),
+      T (1 / (fs * os)), Tbc (split ? 1 / fs : T), ovs (os), p (opts),
       P (std::make_shared<CircuitValues>())
 {
     p.oversample = os;
+    // a preset without oversampling is delayed to the same latency as the others
+    if (opts.quality != Options::None && os == 1) pad.assign (QUALITY_LATENCY, 0.0);
     driveNow = driveMid = p.drive;
     slewCount = 0;
     derive();
     uA[2] = uB[1] = uC[1] = VCC; uA[3] = uB[2] = uC[2] = VEE;
-    build (true);
+    if (! lite) build (true);
     osBuf.assign (os, 0);
 }
 
@@ -754,14 +782,15 @@ void MackieChannel::build (bool fresh)
     {
         topoKey = key;
         A = std::make_unique<Circuit> (stageA (P), T);
-        B = std::make_unique<Circuit> (stageB (P), T);
-        C = std::make_unique<Circuit> (stageC (P), T);
+        B = std::make_unique<Circuit> (stageB (P), Tbc);
+        C = std::make_unique<Circuit> (stageC (P), Tbc);
+        A->setTol (tol); B->setTol (tol); C->setTol (tol);
         uA[0] = uA[1] = 0; uB[0] = 0; uC[0] = 0;
         A->settle (uA.data(), T);
         uB[0] = A->y[A->outIndex ("diff")];
-        B->settle (uB.data(), T);
+        B->settle (uB.data(), Tbc);
         uC[0] = B->y[B->outIndex ("post")];
-        C->settle (uC.data(), T);
+        C->settle (uC.data(), Tbc);
         ixHot = A->outIndex ("pre_hot"); ixCold = A->outIndex ("pre_cold"); ixDiff = A->outIndex ("diff");
         ixPost = B->outIndex ("post"); ixMid = B->outIndex ("eqmid"); ixVa = B->outIndex ("va");
         ixFader = C->outIndex ("fader");
@@ -769,8 +798,8 @@ void MackieChannel::build (bool fresh)
     else
     {
         if (changedA) A->setT (T);
-        if (changedB) B->setT (T);
-        if (changedC) C->setT (T);
+        if (changedB) B->setT (Tbc);
+        if (changedC) C->setT (Tbc);
     }
     changedA = changedB = changedC = false;
 }
@@ -801,6 +830,7 @@ void MackieChannel::setParams (const Options& o)
 
 void MackieChannel::process (const float* input, float* output, int n)
 {
+    if (lite) { processLite (input, output, n); return; }
     if (pending) { pending = false; build (false); }
     double* buf = osBuf.data();
     Circuit& cA = *A; Circuit& cB = *B; Circuit& cC = *C;
@@ -828,6 +858,7 @@ void MackieChannel::process (const float* input, float* output, int n)
             const auto& ya = cA.y;
             const double ph = std::max (std::abs (ya[ixHot]), std::abs (ya[ixCold])); if (ph > peaks.pre) peaks.pre = ph;
             const double d = ya[ixDiff]; if (std::abs (d) > peaks.diff) peaks.diff = std::abs (d);
+            if (split) { buf[k] = d; continue; }
             uB[0] = d; cB.step (uB.data());
             const auto& yb = cB.y;
             const double pe = std::max ({ std::abs (yb[ixPost]), std::abs (yb[ixMid]), std::abs (yb[ixVa]) }); if (pe > peaks.eq) peaks.eq = pe;
@@ -835,8 +866,57 @@ void MackieChannel::process (const float* input, float* output, int n)
             const double fo = cC.y[ixFader]; if (std::abs (fo) > peaks.fader) peaks.fader = std::abs (fo);
             buf[k] = fo;
         }
-        output[s] = (float) (ovs.down (buf, os) * outGain);
+        double out;
+        if (split)
+        {
+            // the EQ and fader stages stay linear with the EQ flat and the fader at U, so they run at the base rate
+            uB[0] = ovs.down (buf, os); cB.step (uB.data());
+            const auto& yb = cB.y;
+            const double pe = std::max ({ std::abs (yb[ixPost]), std::abs (yb[ixMid]), std::abs (yb[ixVa]) }); if (pe > peaks.eq) peaks.eq = pe;
+            uC[0] = yb[ixPost]; cC.step (uC.data());
+            out = cC.y[ixFader]; if (std::abs (out) > peaks.fader) peaks.fader = std::abs (out);
+        }
+        else out = ovs.down (buf, os);
+        out *= outGain;
+        if (! pad.empty()) { const double t = pad[padPos]; pad[padPos] = out; padPos = (padPos + 1) % pad.size(); out = t; }
+        output[s] = (float) out;
     }
+}
+
+// 'lite': the channel as a formula (see _processLite in the JS core)
+static const double LINE_PAD = (1 / (1 / 1500.0 + 1 / 6810.0)) / (5620 + 1 / (1 / 1500.0 + 1 / 6810.0));
+static const double LITE_TRIM = jsmath::pow (10.0, -0.3 / 20);
+
+void MackieChannel::processLite (const float* input, float* output, int n)
+{
+    double* buf = osBuf.data();
+    const double target = p.drive, pad = LINE_PAD * inGain, L = VCC - NJM2068.headroom, kc = T / 1000e-6;
+    bool gliding = driveNow != target;
+    double rg = trimResistance (driveNow) + RG_MIN, pmax = 0;
+    for (int s = 0; s < n; s++)
+    {
+        const double* up = ovs.up (input[s] * pad);
+        for (int k = 0; k < os; k++)
+        {
+            if (gliding)
+            {
+                const double a = slewA; const double m1 = driveMid += (target - driveMid) * a;
+                double d = driveNow + (m1 - driveNow) * a;
+                if (std::abs (target - d) < 1e-5 && std::abs (target - m1) < 1e-5) { d = driveMid = target; gliding = false; }
+                driveNow = d; rg = trimResistance (d) + RG_MIN;
+                if (p.autoLevel) outGain = outGainBase * autoLevelGain (d);
+            }
+            const double v = up[k];
+            vc = (vc + kc * v / rg) / (1 + kc / rg);
+            double d = (RFB / 10000) * (v + 2 * RFB * (v - vc) / rg);
+            if (d > L) d = L; else if (d < -L) d = -L;
+            const double ad = std::abs (d); if (ad > pmax) pmax = ad;
+            buf[k] = d;
+        }
+        output[s] = (float) (ovs.down (buf, os) * outGain * LITE_TRIM);
+    }
+    if (pmax > peaks.diff) peaks.diff = peaks.eq = peaks.fader = pmax;
+    const double pp = std::min (L, pmax / (2 * RFB / 10000)); if (pp > peaks.pre) peaks.pre = pp;
 }
 
 } // namespace mackie

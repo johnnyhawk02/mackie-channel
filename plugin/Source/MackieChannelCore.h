@@ -80,6 +80,8 @@ public:
     void settle (const double* u, double T);
     void updateRV();
     int outIndex (const std::string& name) const;
+    void setTol (double t) { tol = t; if (fine) fine->setTol (t); } // Newton: converged when |dx|^2 < tol per port
+
 
     std::vector<double> y;
     long iters = 0, fails = 0, substeps = 0;
@@ -88,6 +90,10 @@ private:
     struct Port { int va, vb, ia, ib; };
     struct Dev { enum { Dd, Qd, CL, RVd } k; int p; Element* el; };
     struct Reac { int a, b; bool isC; double val; bool be; double g; };
+    // row-compressed side-by-side dense blocks over z = [J, u, i], exact zeros dropped
+    struct Sparse { std::vector<int> ptr, col; std::vector<double> val; int rows = 0; };
+    static void sparseRows (Sparse& S, int rows, std::initializer_list<std::pair<const double*, int>> blocks);
+    static void sparseMul (const Sparse& S, const double* z, double* out);
 
     void evalDevices();
     double residual (double* f);
@@ -119,7 +125,9 @@ private:
     std::vector<double> J, v, i, p, f, jac, dI, dx, vr, vtmp, ftmp, sx, physI, vSave, uPrev, u0, ui;
     std::vector<int> perm;
     bool factored = false;
-    double contract = 0;
+    double contract = 0, tol = 1e-18;
+    Sparse sP, sR, sO;
+    std::vector<double> z;
 
     std::unique_ptr<Circuit> fine;
     bool fineDirty = true;
@@ -134,7 +142,8 @@ public:
     explicit Oversampler (int factor, int tpp = 16);
     const double* up (double x);
     double down (const double* arr, int n);
-    double latency() const { return factor == 1 ? 0.0 : (double) (taps - 1) / factor; }
+    // up and down filters together delay by taps - factor fast samples: tpp - 1 at the base rate
+    double latency() const { return factor == 1 ? 0.0 : (double) (tpp - 1); }
     int factor, tpp, taps;
     std::vector<double> h;
 private:
@@ -156,7 +165,9 @@ struct Options
     double faderDb = 0;
     double outputDb = 0;
     bool autoLevel = true;
-    int oversample = 1;
+    int oversample = 1;          // used when quality is None
+    enum Quality { None = -1, Eco = 0, Normal = 1, High = 2, Lite = 3 };
+    int quality = None;          // preset: see QUALITY in the JS core
     Options();
 };
 
@@ -169,15 +180,17 @@ public:
     void setParams (const Options& o);  // every field but oversample
     void process (const float* input, float* output, int n);
     Peaks readPeaks() { Peaks pk = peaks; peaks = {}; return pk; }
-    double latencySamples() const { return ovs.latency(); }
+    double latencySamples() const { return pad.empty() ? ovs.latency() : (double) pad.size(); }
     double driveNow = 0;
 
 private:
     struct CircuitValues { double trimOhms = 0; bool mic = false, loCut = false; double hi = 0, low = 0, mid = 0, freqOhms = 0, faderRatio = 0; };
     void derive();
     void build (bool fresh);
+    void processLite (const float* input, float* output, int n);
 
-    double fs; int os; double T;
+    double fs; int os; bool split, lite; double tol; double T, Tbc;
+    double vc = 0; // lite: C1 voltage
     Oversampler ovs;
     Options p;
     std::shared_ptr<CircuitValues> P;
@@ -189,7 +202,7 @@ private:
     int ixHot = 0, ixCold = 0, ixDiff = 0, ixPost = 0, ixMid = 0, ixVa = 0, ixFader = 0;
     std::string topoKey;
     bool changedA = false, changedB = false, changedC = false;
-    std::vector<double> osBuf;
+    std::vector<double> osBuf, pad; size_t padPos = 0;
     Peaks peaks;
     bool pending = false;
 };

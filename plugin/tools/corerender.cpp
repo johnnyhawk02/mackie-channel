@@ -1,11 +1,12 @@
 // Core-only render: raw mono float32 in -> raw float32 out, the same steps as
 // tools/render.js (pad by the latency, trim it off). Optional drive automation:
-//   corerender in.f32 out.f32 <drive> [oversample=4] [block=128] [drive2 at-sample]
+//   corerender in.f32 out.f32 <drive> [oversample=4 | lite | eco | normal | high] [block=128] [drive2 at-sample]
 #include "../Source/MackieChannelCore.h"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 int main (int argc, char** argv)
@@ -14,6 +15,7 @@ int main (int argc, char** argv)
     FILE* fi = std::fopen (argv[1], "rb"); if (! fi) return 1;
     std::vector<float> x; float b; while (std::fread (&b, 4, 1, fi) == 1) x.push_back (b); std::fclose (fi);
     mackie::Options o; o.drive = std::atof (argv[3]); o.oversample = argc > 4 ? std::atoi (argv[4]) : 4;
+    if (argc > 4) { const std::string qn = argv[4]; o.quality = qn == "eco" ? 0 : qn == "normal" ? 1 : qn == "high" ? 2 : qn == "lite" ? 3 : -1; }
     const int block = argc > 5 ? std::atoi (argv[5]) : (int) x.size() + 64;
     const double drive2 = argc > 7 ? std::atof (argv[6]) : -1; const long at = argc > 7 ? std::atol (argv[7]) : -1;
     const double sr = std::getenv ("SR") ? std::atof (std::getenv ("SR")) : 44100;

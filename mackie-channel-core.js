@@ -196,6 +196,7 @@
       this.m = ports.length; this.r = reac.length;
       this.outNames = Object.keys(net.outputs);
       this.outNodes = this.outNames.map((k) => node(net.outputs[k]));
+      this.tol = 1e-18; // Newton converged when |dx|^2 < tol per port (V^2)
       this.setT(T);
     }
 
@@ -244,11 +245,16 @@
       [this.Dh, this.Du, this.K] = build(m, (k, t) => rowDiff(this.ports[k].va, this.ports[k].vb, t));
       [this.Ah, this.Au, this.Ai] = build(r, (k, t) => rowDiff(this.reac[k].a, this.reac[k].b, t));
       [this.Oh, this.Ou, this.Oi] = build(o, (k, t) => rowDiff(this.outNodes[k], -1, t));
+      // the same products with the exact zeros left out (about half of stage A's
+      // entries): rows over z = [J, u, i], summed in the same order, same result
+      this.sP = sparseRows(m, [[this.Dh, r], [this.Du, q]]);
+      this.sR = sparseRows(r, [[this.Ah, r], [this.Au, q], [this.Ai, m]]);
+      this.sO = sparseRows(o, [[this.Oh, r], [this.Ou, q], [this.Oi, m]]);
       if (!this.J) {
         this.J = new Float64Array(r); this.v = new Float64Array(m); this.i = new Float64Array(m);
         this.p = new Float64Array(m); this.f = new Float64Array(m); this.jac = new Float64Array(m * m);
         this.dI = new Float64Array(m * 2); this.dx = new Float64Array(m); this.y = new Float64Array(o);
-        this.vr = new Float64Array(r); this.perm = new Int32Array(m);
+        this.vr = new Float64Array(r); this.perm = new Int32Array(m); this.z = new Float64Array(r + q + m);
         this.vtmp = new Float64Array(m); this.ftmp = new Float64Array(m); this.sx = new Float64Array(m); this.factored = false;
         this.physI = new Float64Array(r); this.vSave = new Float64Array(m); this.uPrev = new Float64Array(q);
         this.iters = 0; this.fails = 0; this.substeps = 0;
@@ -331,13 +337,9 @@
     // Newton with a reused (chord) Jacobian while it converges fast, a fresh
     // Jacobian when it does not, and backtracking on the residual norm.
     _solve(u, maxIt) {
-      const { m, r, q, Dh, Du, J, v, p, f, dx, lim, limA, limB } = this;
-      for (let k = 0; k < m; k++) {
-        let s = 0;
-        for (let j = 0; j < r; j++) s += Dh[k * r + j] * J[j];
-        for (let j = 0; j < q; j++) s += Du[k * q + j] * u[j];
-        p[k] = s;
-      }
+      const { m, r, q, J, v, p, f, dx, lim, limA, limB } = this;
+      const z = this.z; z.set(J); for (let j = 0; j < q; j++) z[r + j] = u[j];
+      sparseMul(this.sP, z, p);
       const v0 = this.vtmp, f1 = this.ftmp, sx = this.sx;
       // fast path for stages whose only devices are swing clamps: if every
       // clamp is far from its limits with zero clamp current, the step is linear
@@ -348,7 +350,7 @@
       }
       this.residual(f);
       let it = 0, ok = false, fresh = false, haveDx = false, ndx = 0;
-      const tol = 1e-18 * m;
+      const tol = this.tol * m;
       for (; it < maxIt; it++) {
         if (!haveDx) {
           if (!this.factored) { this.factor(); fresh = true; } else fresh = false;
@@ -407,22 +409,10 @@
 
     // reactive branch voltages and currents, outputs, state update
     _finish(u) {
-      const { m, r, q, J, i, Ah, Au, Ai, vr, reac, physI } = this;
-      for (let k = 0; k < r; k++) {
-        let s = 0;
-        for (let j = 0; j < r; j++) s += Ah[k * r + j] * J[j];
-        for (let j = 0; j < q; j++) s += Au[k * q + j] * u[j];
-        for (let j = 0; j < m; j++) s += Ai[k * m + j] * i[j];
-        vr[k] = s;
-      }
-      const y = this.y, o = y.length, { Oh, Ou, Oi } = this;
-      for (let k = 0; k < o; k++) {
-        let s = 0;
-        for (let j = 0; j < r; j++) s += Oh[k * r + j] * J[j];
-        for (let j = 0; j < q; j++) s += Ou[k * q + j] * u[j];
-        for (let j = 0; j < m; j++) s += Oi[k * m + j] * i[j];
-        y[k] = s;
-      }
+      const { r, q, J, i, vr, reac, physI, z } = this;
+      z.set(J); for (let j = 0; j < q; j++) z[r + j] = u[j]; z.set(i, r + q);
+      sparseMul(this.sR, z, vr);
+      sparseMul(this.sO, z, this.y);
       for (let k = 0; k < r; k++) {
         const re = reac[k], g = re.g, vv = vr[k];
         physI[k] = g * vv + J[k];
@@ -461,7 +451,7 @@
       this.substeps++;
       const NS = 8;
       if (!this.fine || this.fine.dirty) {
-        if (!this.fine) this.fine = new Circuit(this.net, this.T / NS);
+        if (!this.fine) { this.fine = new Circuit(this.net, this.T / NS); this.fine.tol = this.tol; }
         else this.fine.setT(this.T / NS);
         this.fine.dirty = false;
       }
@@ -502,6 +492,20 @@
     nodeVoltageNames() { return this.outNames; }
   }
 
+  // row-compressed copy of side-by-side dense blocks [[M, cols], ...], zeros dropped
+  function sparseRows(rows, blocks) {
+    const ptr = new Int32Array(rows + 1), col = [], val = [];
+    for (let k = 0; k < rows; k++) {
+      let off = 0;
+      for (const [M, w] of blocks) { for (let j = 0; j < w; j++) { const a = M[k * w + j]; if (a !== 0) { col.push(off + j); val.push(a); } } off += w; }
+      ptr[k + 1] = col.length;
+    }
+    return { ptr, col: Int32Array.from(col), val: Float64Array.from(val), rows };
+  }
+  function sparseMul(S, z, out) {
+    const { ptr, col, val, rows } = S;
+    for (let k = 0; k < rows; k++) { let s = 0; for (let e = ptr[k], end = ptr[k + 1]; e < end; e++) s += val[e] * z[col[e]]; out[k] = s; }
+  }
   function softplus(z) { return z > 30 ? z : z < -30 ? Math.exp(z) : Math.log1p(Math.exp(z)); }
   function sigmoid(z) { return z > 30 ? 1 : z < -30 ? Math.exp(z) : 1 / (1 + Math.exp(-z)); }
   // limited exponential (linear continuation beyond e^80)
@@ -710,12 +714,25 @@
       let a = 0; for (let k = 0; k < N; k++) a += h[k] * this.downBuf[this.downPos + N - k];
       return a;
     }
-    get latency() { return this.factor === 1 ? 0 : (this.taps - 1) / this.factor; }
+    // up and down filters together delay by taps - factor fast samples: tpp - 1 at the base rate
+    get latency() { return this.factor === 1 ? 0 : this.tpp - 1; }
   }
 
   // ===========================================================================
   // Channel
   // ===========================================================================
+  // Quality presets. 'high' is the reference: 4x, every stage oversampled, Newton
+  // to 1e-9 V. 'normal' runs the preamp at 2x and the (linear) EQ and fader
+  // stages at the base rate. 'eco' runs everything at the base rate. 'lite' is
+  // not the circuit: a formula of its gain, the C1 shelf and the rail clip.
+  // tools/quality.js measures each against 'high'.
+  const QUALITY = {
+    high: { os: 4, split: false, tol: 1e-18 },
+    normal: { os: 2, split: true, tol: 1e-14 },
+    eco: { os: 1, split: false, tol: 1e-14 },
+    lite: { os: 4, split: false, tol: 1e-14, lite: true }, // no circuit solve: see _processLite
+  };
+  const QUALITY_LATENCY = 15; // samples, the oversamplers' delay (tpp - 1)
   const DEFAULTS = {
     drive: 0.3,            // TRIM rotation 0..1
     driveSlewMs: 30,       // Drive smoothing time constant in ms (0 = jump)
@@ -731,9 +748,15 @@
   class MackieChannel {
     constructor(sampleRate, opts = {}) {
       this.fs = sampleRate;
-      this.os = opts.oversample || 1; // circuit runs at fs * os
-      this.T = 1 / (this.fs * this.os);
+      // quality preset (QUALITY below); without one, opts.oversample at full precision
+      const Q = QUALITY[opts.quality] || { os: opts.oversample || 1, split: false, tol: 1e-18 };
+      this.quality = QUALITY[opts.quality] ? opts.quality : null;
+      this.os = Q.os; this.split = Q.split && Q.os > 1; this.tol = Q.tol; this.lite = !!Q.lite;
+      this.T = 1 / (this.fs * this.os);           // stage A (the preamp) runs at fs * os
+      this.Tbc = this.split ? 1 / this.fs : this.T; // stages B and C (EQ, fader)
       this.ovs = new Oversampler(this.os);
+      // a preset without oversampling is delayed to the same latency as the others
+      this.pad = this.quality && this.os === 1 ? new Float64Array(QUALITY_LATENCY) : null; this.padPos = 0;
       this.p = Object.assign({}, DEFAULTS);
       for (const k of Object.keys(DEFAULTS)) if (opts[k] !== undefined) this.p[k] = opts[k];
       this.P = {}; // circuit-level values read by the netlists
@@ -742,7 +765,7 @@
       this._derive();
       this.uA = new Float64Array(4); this.uB = new Float64Array(3); this.uC = new Float64Array(3);
       this.uA[2] = this.uB[1] = this.uC[1] = VCC; this.uA[3] = this.uB[2] = this.uC[2] = VEE;
-      this._build(true);
+      if (this.lite) this.vc = 0; else this._build(true);
       this.osBuf = new Float64Array(this.os);
       this.peaks = { pre: 0, diff: 0, eq: 0, fader: 0 };
       this.iters = 0; this.steps = 0;
@@ -778,14 +801,15 @@
         // topology change: new circuits, settle each to its operating point
         this.topoKey = key;
         this.A = new Circuit(stageA(P), this.T);
-        this.B = new Circuit(stageB(P), this.T);
-        this.C = new Circuit(stageC(P), this.T);
+        this.B = new Circuit(stageB(P), this.Tbc);
+        this.C = new Circuit(stageC(P), this.Tbc);
+        this.A.tol = this.B.tol = this.C.tol = this.tol;
         this.uA[0] = this.uA[1] = 0; this.uB[0] = 0; this.uC[0] = 0;
         this.A.settle(this.uA, this.T);
         this.uB[0] = this.A.y[this.A.outNames.indexOf('diff')];
-        this.B.settle(this.uB, this.T);
+        this.B.settle(this.uB, this.Tbc);
         this.uC[0] = this.B.y[this.B.outNames.indexOf('post')];
-        this.C.settle(this.uC, this.T);
+        this.C.settle(this.uC, this.Tbc);
         this.ixA = { hot: this.A.outNames.indexOf('pre_hot'), cold: this.A.outNames.indexOf('pre_cold'), diff: this.A.outNames.indexOf('diff') };
         this.ixB = { post: this.B.outNames.indexOf('post'), mid: this.B.outNames.indexOf('eqmid'), va: this.B.outNames.indexOf('va') };
         this.ixC = { fader: this.C.outNames.indexOf('fader') };
@@ -793,8 +817,8 @@
         // value change only: rebuild the affected stages' matrices, keep the state
         const k = this.changed || {};
         if (k.A) this.A.setT(this.T);
-        if (k.B) this.B.setT(this.T);
-        if (k.C) this.C.setT(this.T);
+        if (k.B) this.B.setT(this.Tbc);
+        if (k.C) this.C.setT(this.Tbc);
       }
       this.changed = {};
     }
@@ -825,20 +849,22 @@
         channelGainDb: 20 * Math.log10(pad * gd * 5110 / 10000),
         padDb: 20 * Math.log10(pad),
         c1CornerHz: 1 / (2 * Math.PI * rg * 1000e-6),
-        latencySamples: this.ovs.latency,
-        avgIterations: this.steps ? this.A.iters / this.steps : 0,
-        substeps: this.A.substeps + this.B.substeps + this.C.substeps,
-        unconverged: this.A.fails + this.B.fails + this.C.fails,
+        latencySamples: this.pad ? this.pad.length : this.ovs.latency,
+        quality: this.quality, oversample: this.os,
+        avgIterations: this.steps && !this.lite ? this.A.iters / this.steps : 0,
+        substeps: this.lite ? 0 : this.A.substeps + this.B.substeps + this.C.substeps,
+        unconverged: this.lite ? 0 : this.A.fails + this.B.fails + this.C.fails,
       };
     }
 
     readPeaks() { const p = this.peaks; this.peaks = { pre: 0, diff: 0, eq: 0, fader: 0 }; return p; }
 
     process(input, output, n = input.length) {
+      if (this.lite) return this._processLite(input, output, n);
       if (this.pending) { this.pending = false; this._build(false); }
       const os = this.os, buf = this.osBuf, A = this.A, B = this.B, C = this.C, pk = this.peaks;
       const uA = this.uA, uB = this.uB, uC = this.uC, ia = this.ixA, ib = this.ixB, ic = this.ixC;
-      const mic = this.p.input === 'mic', target = this.p.drive;
+      const mic = this.p.input === 'mic', target = this.p.drive, split = this.split, pad = this.pad;
       let gliding = this.driveNow !== target;
       for (let s = 0; s < n; s++) {
         const up = this.ovs.up(input[s] * this.inGain);
@@ -859,6 +885,7 @@
           const ya = A.y;
           const ph = Math.max(Math.abs(ya[ia.hot]), Math.abs(ya[ia.cold])); if (ph > pk.pre) pk.pre = ph;
           const d = ya[ia.diff]; if (Math.abs(d) > pk.diff) pk.diff = Math.abs(d);
+          if (split) { buf[k] = d; continue; }
           uB[0] = d; B.step(uB);
           const yb = B.y;
           const pe = Math.max(Math.abs(yb[ib.post]), Math.abs(yb[ib.mid]), Math.abs(yb[ib.va])); if (pe > pk.eq) pk.eq = pe;
@@ -866,11 +893,60 @@
           const f = C.y[ic.fader]; if (Math.abs(f) > pk.fader) pk.fader = Math.abs(f);
           buf[k] = f;
         }
-        output[s] = this.ovs.down(buf) * this.outGain;
+        let out;
+        if (split) {
+          // the EQ and fader stages stay linear with the EQ flat and the fader at U
+          // (their swing is above the preamp's), so they run at the base rate
+          uB[0] = this.ovs.down(buf); B.step(uB);
+          const yb = B.y;
+          const pe = Math.max(Math.abs(yb[ib.post]), Math.abs(yb[ib.mid]), Math.abs(yb[ib.va])); if (pe > pk.eq) pk.eq = pe;
+          uC[0] = yb[ib.post]; C.step(uC);
+          out = C.y[ic.fader]; if (Math.abs(out) > pk.fader) pk.fader = Math.abs(out);
+        } else out = this.ovs.down(buf);
+        out *= this.outGain;
+        if (pad) { const t = pad[this.padPos]; pad[this.padPos] = out; this.padPos = (this.padPos + 1) % pad.length; out = t; }
+        output[s] = out;
       }
       return output;
     }
+
+    // 'lite': the channel reduced to a formula. Line pad, then the preamp's gain
+    // 1 + 2 R268 / (trim + R1 + 1/sC1) with C1 as a real capacitor (so the bass
+    // shelf follows the knob without clicks), then U33A's rail as a hard clip,
+    // then auto level. The rest of the path is flat with the EQ centred, apart
+    // from LITE_TRIM, which lines the 1 kHz gain up with the circuit (the
+    // preamp's input loading the pad). Line input only.
+    _processLite(input, output, n) {
+      const os = this.os, buf = this.osBuf, pk = this.peaks, T = this.T, target = this.p.drive;
+      const pad = LINE_PAD * this.inGain, L = VCC - MODELS.NJM2068.headroom, kc = T / 1000e-6;
+      let gliding = this.driveNow !== target, rg = trimResistance(this.driveNow) + RG_MIN, vc = this.vc, pmax = 0;
+      for (let s = 0; s < n; s++) {
+        const up = this.ovs.up(input[s] * pad);
+        for (let k = 0; k < os; k++) {
+          if (gliding) {
+            const a = this.slewA, m1 = this.driveMid += (target - this.driveMid) * a;
+            let d = this.driveNow + (m1 - this.driveNow) * a;
+            if (Math.abs(target - d) < 1e-5 && Math.abs(target - m1) < 1e-5) { d = this.driveMid = target; gliding = false; }
+            this.driveNow = d; rg = trimResistance(d) + RG_MIN;
+            if (this.p.autoLevel) this.outGain = this.outGainBase * autoLevelGain(d);
+          }
+          const v = up[k];
+          vc = (vc + kc * v / rg) / (1 + kc / rg);      // C1, backward Euler
+          let d = (RFB / 10000) * (v + 2 * RFB * (v - vc) / rg);
+          if (d > L) d = L; else if (d < -L) d = -L;
+          const ad = Math.abs(d); if (ad > pmax) pmax = ad;
+          buf[k] = d;
+        }
+        output[s] = this.ovs.down(buf) * this.outGain * LITE_TRIM;
+      }
+      this.vc = vc;
+      if (pmax > pk.diff) pk.diff = pk.eq = pk.fader = pmax;
+      const pp = Math.min(L, pmax / (2 * RFB / 10000)); if (pp > pk.pre) pk.pre = pp;
+      return output;
+    }
   }
+  const LINE_PAD = (1 / (1 / 1500 + 1 / 6810)) / (5620 + 1 / (1 / 1500 + 1 / 6810)); // R220 into R197 || R523
+  const LITE_TRIM = Math.pow(10, -0.3 / 20);
 
   // swing limits per stage, for meters
   const LIMITS = {
@@ -878,5 +954,5 @@
     eq: VCC - MODELS.NJM4560.headroom, fader: VCC - MODELS.NJM4560.headroom,
   };
 
-  return { MackieChannel, Circuit, Netlist, stageA, stageB, stageC, trimResistance, MODELS, LIMITS, DEFAULTS, factory: MackieChannelCoreFactory };
+  return { MackieChannel, QUALITY, Oversampler, Circuit, Netlist, stageA, stageB, stageC, trimResistance, MODELS, LIMITS, DEFAULTS, factory: MackieChannelCoreFactory };
 });

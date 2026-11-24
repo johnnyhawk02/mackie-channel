@@ -1,10 +1,12 @@
 // Runs the installed VST3 like a host would and saves its output, for the null
 // test against the JS model (see nulltest.sh).
 //   vst3null in.f32 out.f32 <sampleRate> <drive> [block=512] [drive2 at-sample]
+// QUALITY=lite|eco|normal|high (default high) sets the Quality choice.
 // The mono input goes to both channels of a stereo bus; the output is channel 1
 // with the reported latency trimmed off.
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 int main (int argc, char** argv)
@@ -22,7 +24,7 @@ int main (int argc, char** argv)
     juce::AudioPluginFormatManager fm;
     fm.addFormat (new juce::VST3PluginFormat());
     const auto path = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
-                          .getChildFile ("Library/Audio/Plug-Ins/VST3/Johnny/VLZ Channel Drive.vst3").getFullPathName();
+                          .getChildFile ("Library/Audio/Plug-Ins/VST3/Johnny/Colourbox.vst3").getFullPathName();
     juce::OwnedArray<juce::PluginDescription> types;
     juce::VST3PluginFormat vst3;
     vst3.findAllTypesForFile (types, path);
@@ -33,6 +35,13 @@ int main (int argc, char** argv)
     plugin->setPlayConfigDetails (2, 2, sr, block);
     auto* param = plugin->getParameters()[0];
     param->setValue (drive);
+    if (const char* qn = std::getenv ("QUALITY"))
+    {
+        const juce::StringArray names { "lite", "eco", "normal", "high" };
+        const int qi = names.indexOf (qn);
+        if (qi < 0) { std::fprintf (stderr, "unknown QUALITY %s\n", qn); return 1; }
+        plugin->getParameters()[1]->setValue ((float) qi / 3.0f);
+    }
     plugin->prepareToPlay (sr, block);
     const int latency = plugin->getLatencySamples();
 

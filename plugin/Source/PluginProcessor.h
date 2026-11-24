@@ -7,14 +7,16 @@
 
 // One input channel of a CR1604-VLZ as an overdrive, with the Drive knob as its
 // TRIM. The sound is MackieChannel from MackieChannelCore (the C++ twin of
-// mackie-channel-core.js), run at 4x oversampling like tools/render.js.
-class VlzChannelDriveProcessor : public juce::AudioProcessor
+// mackie-channel-core.js). The Quality choice picks the core's preset: High is
+// 4x oversampling like tools/render.js; Normal, Eco and Lite trade accuracy for CPU.
+class ColourboxProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
-    static constexpr int oversample = 4;
+    // Quality choice index -> mackie::Options::Quality (the order shown in the editor)
+    static constexpr int qualityPreset[4] = { mackie::Options::Lite, mackie::Options::Eco, mackie::Options::Normal, mackie::Options::High };
 
-    VlzChannelDriveProcessor();
-    ~VlzChannelDriveProcessor() override = default;
+    ColourboxProcessor();
+    ~ColourboxProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -47,10 +49,23 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
+    void timerCallback() override;
+    int qualityIndex() const { return juce::jlimit (0, 3, (int) qualityParam->load()); }
+
     std::atomic<float>* driveParam = nullptr;
+    std::atomic<float>* qualityParam = nullptr;
     std::unique_ptr<mackie::MackieChannel> channel;
     mackie::Options options;
-    std::vector<float> mono, wet;
+    std::vector<float> mono, wet, wetOld;
+    double rate = 0;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VlzChannelDriveProcessor)
+    // A Quality change builds a new channel on the message thread (timer), hands it
+    // to the audio thread, which crossfades from the old one and hands that back.
+    int builtQuality = -1;                                   // message thread
+    std::atomic<mackie::MackieChannel*> incoming { nullptr }; // message -> audio
+    std::atomic<mackie::MackieChannel*> retired { nullptr };  // audio -> message
+    std::unique_ptr<mackie::MackieChannel> fadingOut;        // audio thread
+    int fadePos = 0, fadeLen = 1;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ColourboxProcessor)
 };

@@ -10,6 +10,7 @@ namespace
 
     constexpr float a0 = -135.0f, a1 = 135.0f; // knob travel in degrees, as on the page
     constexpr int size = 236;                  // the page's knob area, in its own units
+    constexpr int row = 30;                    // the Quality row under the knob
 }
 
 void DriveKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
@@ -29,7 +30,7 @@ void DriveKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width
         g.drawLine (c.x + r0 * s * std::sin (a), c.y - r0 * s * std::cos (a),
                     c.x + r1 * s * std::sin (a), c.y - r1 * s * std::cos (a), 1.2f * s);
     }
-    const double lo = VlzChannelDriveProcessor::channelGainDb (0), hi = VlzChannelDriveProcessor::channelGainDb (1);
+    const double lo = ColourboxProcessor::channelGainDb (0), hi = ColourboxProcessor::channelGainDb (1);
     g.setFont (juce::FontOptions (14.0f * s, juce::Font::bold));
     for (int m : { -10, 0, 10, 20, 30, 40, 50 })
     {
@@ -52,7 +53,7 @@ void DriveKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width
     g.fillPath (ptr);
 }
 
-VlzChannelDriveEditor::VlzChannelDriveEditor (VlzChannelDriveProcessor& p)
+ColourboxEditor::ColourboxEditor (ColourboxProcessor& p)
     : AudioProcessorEditor (&p)
 {
     knob.setLookAndFeel (&look);
@@ -64,20 +65,49 @@ VlzChannelDriveEditor::VlzChannelDriveEditor (VlzChannelDriveProcessor& p)
     attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, "drive", knob);
     knob.setDoubleClickReturnValue (true, 0.0); // the page: double-click goes back to 0
     addAndMakeVisible (knob);
-    setSize (size, size);
+
+    auto* param = p.apvts.getParameter ("quality");
+    qualityAttachment = std::make_unique<juce::ParameterAttachment> (*param, [this] (float v) { showQuality ((int) v); });
+    const char* names[4] = { "Lite", "Eco", "Normal", "High" };
+    for (int i = 0; i < 4; i++)
+    {
+        auto& b = quality[i];
+        b.setButtonText (names[i]);
+        b.setClickingTogglesState (false);
+        b.setColour (juce::TextButton::buttonColourId, panel);
+        b.setColour (juce::TextButton::buttonOnColourId, panel);
+        b.setColour (juce::TextButton::textColourOffId, inkSoft);
+        b.setColour (juce::TextButton::textColourOnId, accent);
+        b.setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+        b.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+        b.setTooltip ("Quality: High is the full circuit at 4x; lower settings use less CPU");
+        b.onClick = [this, i] { qualityAttachment->setValueAsCompleteGesture ((float) i); };
+        addAndMakeVisible (b);
+    }
+    qualityAttachment->sendInitialUpdate();
+    setSize (size, size + row);
 }
 
-VlzChannelDriveEditor::~VlzChannelDriveEditor()
+void ColourboxEditor::showQuality (int index)
+{
+    for (int i = 0; i < 4; i++) quality[i].setToggleState (i == index, juce::dontSendNotification);
+}
+
+ColourboxEditor::~ColourboxEditor()
 {
     knob.setLookAndFeel (nullptr);
 }
 
-void VlzChannelDriveEditor::paint (juce::Graphics& g)
+void ColourboxEditor::paint (juce::Graphics& g)
 {
     g.fillAll (panel);
 }
 
-void VlzChannelDriveEditor::resized()
+void ColourboxEditor::resized()
 {
-    knob.setBounds (getLocalBounds());
+    auto r = getLocalBounds();
+    knob.setBounds (r.removeFromTop (size));
+    r = r.withSizeKeepingCentre (size - 40, row - 8).translated (0, -12);
+    const int w = r.getWidth() / 4;
+    for (auto& b : quality) b.setBounds (r.removeFromLeft (w));
 }

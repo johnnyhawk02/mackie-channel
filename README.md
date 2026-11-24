@@ -73,7 +73,7 @@ The meter taps and everything after U103A are not modelled.
 
 ## Running
 
-- **Browser:** open `index.html` (any static server). Live playback runs the circuit at the audio device's sample rate, mono, in an AudioWorklet. The load is typically 0.2–0.5× real time on one core, and about 1× at full drive with heavy clipping.
+- **Browser:** open `index.html` (any static server). Live playback runs mono in an AudioWorklet, at the Quality picked under the knob (Normal by default).
 - **Offline, higher quality:**
 
   ```
@@ -82,8 +82,23 @@ The meter taps and everything after U103A are not modelled.
 
   `renders/` holds the four test samples at drive 0.15, 0.3 and 0.6, rendered at 4× oversampling.
 
-- **VST3:** `VLZ Channel Drive`, built from `plugin/` and installed to `~/Library/Audio/Plug-Ins/VST3/Johnny/`. It has one Drive knob and runs at 4× oversampling. See `plugin/README.md`.
-- **Core API:** `new MackieChannel(sampleRate, { drive, input: 'line'|'mic', loCut, eqHigh, eqMid, eqLow, eqFreq, faderDb, outputDb, fullScaleVolts, autoLevel, driveSlewMs, oversample })`, then `process(input, output)`, `setParams({...})`, `readPeaks()` and `info()`.
+- **VST3:** `Colourbox`, built from `plugin/` and installed to `~/Library/Audio/Plug-Ins/VST3/Johnny/`. It has the Drive knob and a Quality setting (High by default). See `plugin/README.md`.
+- **Core API:** `new MackieChannel(sampleRate, { quality: 'lite'|'eco'|'normal'|'high', drive, input: 'line'|'mic', loCut, eqHigh, eqMid, eqLow, eqFreq, faderDb, outputDb, fullScaleVolts, autoLevel, driveSlewMs, oversample })`, then `process(input, output)`, `setParams({...})`, `readPeaks()` and `info()`.
+
+## Quality settings
+
+The circuit solve is most of the CPU, and stage A (the preamp, 15 nonlinear ports) is about two thirds of that. Oversampling multiplies all of it. The four settings, measured with `node tools/quality.js` on the four bass samples at Drive 0 to 1 against High:
+
+| Setting | What runs | CPU (C++, full drive) | Difference from High, worst case |
+|---|---|---|---|
+| High | The whole circuit at 4×, Newton to 1 nV. Bit-identical to the sound before the settings existed. | 0.76× real time | none |
+| Normal | Preamp at 2×; the EQ and fader stages (linear with the EQ flat and the fader at U) at the base rate; Newton to 0.1 µV | 0.34× | octave bands within 0.6 dB; null −32 dB rms at full drive, −46 dB or better from Drive 0.6 down |
+| Eco | Everything at the base rate (the web page's old live sound) | 0.21× | octave bands within 2.2 dB, all of it the top octaves at full drive; null −24 dB rms at full drive |
+| Lite | Not the circuit: the line pad, the preamp gain with C1 as a real capacitor (the bass shelf), a hard clip at U33A's rail, auto level; 4× | 0.005× | octave bands within 0.6 dB up to Drive 0.6, up to 5 dB at full drive; null about −20 dB rms (low-end phase from the coupling caps it leaves out) |
+
+The CPU column is one core of the cloud build machine; a Mac is faster. For scale, 4× against 8× differs by −44 dB rms at full drive, so High is itself not the last word there. Every setting has the same 15-sample latency (Eco is padded), so switching does not move a track in a DAW.
+
+Two changes apply to every setting and do not change a single sample: the matrix products skip their exact zeros (about half of stage A's entries), and the reported latency is now the filters' real delay, 15 samples (it was 16, from a formula that assumed 15.75).
 
 ## Validating against a real desk
 
