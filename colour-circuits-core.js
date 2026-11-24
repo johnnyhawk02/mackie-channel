@@ -523,7 +523,8 @@
     const y = luTmp;
     for (let i = 0; i < n; i++) y[i] = b[perm[i]];
     for (let i = 0; i < n; i++) { let s = y[i]; for (let j = 0; j < i; j++) s -= A[i * n + j] * y[j]; y[i] = s; }
-    for (let i = n - 1; i >= 0; i--) { let s = y[i]; for (let j = i + 1; j < n; j++) s -= A[i * n + j] * y[j]; y[i] = s / A[i * n + i]; }
+    // back substitution a column at a time (the order the C++ uses: it vectorises there)
+    for (let j = n - 1; j >= 0; j--) { const yj = y[j] / A[j * n + j]; y[j] = yj; for (let i = 0; i < j; i++) y[i] -= A[i * n + j] * yj; }
     for (let i = 0; i < n; i++) b[i] = y[i];
   }
 
