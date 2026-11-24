@@ -2,6 +2,7 @@
 // of the same name, translated statement by statement. Keep them in step.
 #include "MackieChannelCore.h"
 #include "JsMath.h"
+#include "OversamplerTaps.h"
 
 #include <algorithm>
 #include <cmath>
@@ -704,7 +705,10 @@ static std::vector<double> designLowpass (int taps, double cutoff, int factor)
 
 Oversampler::Oversampler (int factor_, int tpp_) : factor (factor_), tpp (tpp_), taps (factor_ * tpp_)
 {
-    h = designLowpass (taps, 0.9, factor);
+    // the presets' filters come from the JS bit for bit (OversamplerTaps.h)
+    if (factor == 2 && tpp == 16) h.assign (TAPS_2x16, TAPS_2x16 + 32);
+    else if (factor == 4 && tpp == 16) h.assign (TAPS_4x16, TAPS_4x16 + 64);
+    else h = designLowpass (taps, 0.9, factor);
     upBuf.assign (tpp * 2, 0); downBuf.assign (taps * 2, 0); outBuf.assign (factor, 0);
 }
 
