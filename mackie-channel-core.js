@@ -721,18 +721,17 @@
   // ===========================================================================
   // Channel
   // ===========================================================================
-  // Quality presets. 'high' is the reference: 4x, every stage oversampled, Newton
-  // to 1e-9 V. 'normal' runs the preamp at 2x and the (linear) EQ and fader
-  // stages at the base rate. 'eco' runs everything at the base rate. 'lite' is
-  // not the circuit: a formula of its gain, the C1 shelf and the rail clip.
-  // tools/quality.js measures each against 'high'.
+  // Quality presets: the whole circuit at 4x ('high', the reference, Newton to
+  // 1e-9 V), 3x or 2x (Newton to 1e-8 V). Less oversampling means more aliasing
+  // on bright, heavily driven material. 'lite' is not the circuit: a formula of
+  // its gain, the C1 shelf and the rail clip, at 4x. Every preset has the same
+  // latency (15 samples). tools/quality.js measures each against 'high'.
   const QUALITY = {
-    high: { os: 4, split: false, tol: 1e-18 },
-    normal: { os: 2, split: true, tol: 1e-14 },
-    eco: { os: 1, split: false, tol: 1e-14 },
-    lite: { os: 4, split: false, tol: 1e-14, lite: true }, // no circuit solve: see _processLite
+    high: { os: 4, tol: 1e-18 },
+    normal: { os: 3, tol: 1e-16 },
+    eco: { os: 2, tol: 1e-16 },
+    lite: { os: 4, tol: 1e-16, lite: true }, // no circuit solve: see _processLite
   };
-  const QUALITY_LATENCY = 15; // samples, the oversamplers' delay (tpp - 1)
   const DEFAULTS = {
     drive: 0.3,            // TRIM rotation 0..1
     driveSlewMs: 30,       // Drive smoothing time constant in ms (0 = jump)
@@ -749,14 +748,11 @@
     constructor(sampleRate, opts = {}) {
       this.fs = sampleRate;
       // quality preset (QUALITY below); without one, opts.oversample at full precision
-      const Q = QUALITY[opts.quality] || { os: opts.oversample || 1, split: false, tol: 1e-18 };
+      const Q = QUALITY[opts.quality] || { os: opts.oversample || 1, tol: 1e-18 };
       this.quality = QUALITY[opts.quality] ? opts.quality : null;
-      this.os = Q.os; this.split = Q.split && Q.os > 1; this.tol = Q.tol; this.lite = !!Q.lite;
-      this.T = 1 / (this.fs * this.os);           // stage A (the preamp) runs at fs * os
-      this.Tbc = this.split ? 1 / this.fs : this.T; // stages B and C (EQ, fader)
+      this.os = Q.os; this.tol = Q.tol; this.lite = !!Q.lite;
+      this.T = 1 / (this.fs * this.os); // the circuit runs at fs * os
       this.ovs = new Oversampler(this.os);
-      // a preset without oversampling is delayed to the same latency as the others
-      this.pad = this.quality && this.os === 1 ? new Float64Array(QUALITY_LATENCY) : null; this.padPos = 0;
       this.p = Object.assign({}, DEFAULTS);
       for (const k of Object.keys(DEFAULTS)) if (opts[k] !== undefined) this.p[k] = opts[k];
       this.P = {}; // circuit-level values read by the netlists
@@ -801,15 +797,15 @@
         // topology change: new circuits, settle each to its operating point
         this.topoKey = key;
         this.A = new Circuit(stageA(P), this.T);
-        this.B = new Circuit(stageB(P), this.Tbc);
-        this.C = new Circuit(stageC(P), this.Tbc);
+        this.B = new Circuit(stageB(P), this.T);
+        this.C = new Circuit(stageC(P), this.T);
         this.A.tol = this.B.tol = this.C.tol = this.tol;
         this.uA[0] = this.uA[1] = 0; this.uB[0] = 0; this.uC[0] = 0;
         this.A.settle(this.uA, this.T);
         this.uB[0] = this.A.y[this.A.outNames.indexOf('diff')];
-        this.B.settle(this.uB, this.Tbc);
+        this.B.settle(this.uB, this.T);
         this.uC[0] = this.B.y[this.B.outNames.indexOf('post')];
-        this.C.settle(this.uC, this.Tbc);
+        this.C.settle(this.uC, this.T);
         this.ixA = { hot: this.A.outNames.indexOf('pre_hot'), cold: this.A.outNames.indexOf('pre_cold'), diff: this.A.outNames.indexOf('diff') };
         this.ixB = { post: this.B.outNames.indexOf('post'), mid: this.B.outNames.indexOf('eqmid'), va: this.B.outNames.indexOf('va') };
         this.ixC = { fader: this.C.outNames.indexOf('fader') };
@@ -817,8 +813,8 @@
         // value change only: rebuild the affected stages' matrices, keep the state
         const k = this.changed || {};
         if (k.A) this.A.setT(this.T);
-        if (k.B) this.B.setT(this.Tbc);
-        if (k.C) this.C.setT(this.Tbc);
+        if (k.B) this.B.setT(this.T);
+        if (k.C) this.C.setT(this.T);
       }
       this.changed = {};
     }
@@ -849,7 +845,7 @@
         channelGainDb: 20 * Math.log10(pad * gd * 5110 / 10000),
         padDb: 20 * Math.log10(pad),
         c1CornerHz: 1 / (2 * Math.PI * rg * 1000e-6),
-        latencySamples: this.pad ? this.pad.length : this.ovs.latency,
+        latencySamples: this.ovs.latency,
         quality: this.quality, oversample: this.os,
         avgIterations: this.steps && !this.lite ? this.A.iters / this.steps : 0,
         substeps: this.lite ? 0 : this.A.substeps + this.B.substeps + this.C.substeps,
@@ -864,7 +860,7 @@
       if (this.pending) { this.pending = false; this._build(false); }
       const os = this.os, buf = this.osBuf, A = this.A, B = this.B, C = this.C, pk = this.peaks;
       const uA = this.uA, uB = this.uB, uC = this.uC, ia = this.ixA, ib = this.ixB, ic = this.ixC;
-      const mic = this.p.input === 'mic', target = this.p.drive, split = this.split, pad = this.pad;
+      const mic = this.p.input === 'mic', target = this.p.drive;
       let gliding = this.driveNow !== target;
       for (let s = 0; s < n; s++) {
         const up = this.ovs.up(input[s] * this.inGain);
@@ -885,7 +881,6 @@
           const ya = A.y;
           const ph = Math.max(Math.abs(ya[ia.hot]), Math.abs(ya[ia.cold])); if (ph > pk.pre) pk.pre = ph;
           const d = ya[ia.diff]; if (Math.abs(d) > pk.diff) pk.diff = Math.abs(d);
-          if (split) { buf[k] = d; continue; }
           uB[0] = d; B.step(uB);
           const yb = B.y;
           const pe = Math.max(Math.abs(yb[ib.post]), Math.abs(yb[ib.mid]), Math.abs(yb[ib.va])); if (pe > pk.eq) pk.eq = pe;
@@ -893,19 +888,7 @@
           const f = C.y[ic.fader]; if (Math.abs(f) > pk.fader) pk.fader = Math.abs(f);
           buf[k] = f;
         }
-        let out;
-        if (split) {
-          // the EQ and fader stages stay linear with the EQ flat and the fader at U
-          // (their swing is above the preamp's), so they run at the base rate
-          uB[0] = this.ovs.down(buf); B.step(uB);
-          const yb = B.y;
-          const pe = Math.max(Math.abs(yb[ib.post]), Math.abs(yb[ib.mid]), Math.abs(yb[ib.va])); if (pe > pk.eq) pk.eq = pe;
-          uC[0] = yb[ib.post]; C.step(uC);
-          out = C.y[ic.fader]; if (Math.abs(out) > pk.fader) pk.fader = Math.abs(out);
-        } else out = this.ovs.down(buf);
-        out *= this.outGain;
-        if (pad) { const t = pad[this.padPos]; pad[this.padPos] = out; this.padPos = (this.padPos + 1) % pad.length; out = t; }
-        output[s] = out;
+        output[s] = this.ovs.down(buf) * this.outGain;
       }
       return output;
     }

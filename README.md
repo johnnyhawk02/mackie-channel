@@ -87,18 +87,22 @@ The meter taps and everything after U103A are not modelled.
 
 ## Quality settings
 
-The circuit solve is most of the CPU, and stage A (the preamp, 15 nonlinear ports) is about two thirds of that. Oversampling multiplies all of it. The four settings, measured with `node tools/quality.js` on the four bass samples at Drive 0 to 1 against High:
+The circuit solve is most of the CPU, and stage A (the preamp, 15 nonlinear ports) is about two thirds of that. Oversampling multiplies all of it, and it is also what keeps the clipping from aliasing, so the settings trade one against the other. Measured with `node tools/quality.js` (four bass samples, Drive 0 to 1, against High), C++ renders of the core (`plugin/tools/corerender.cpp`) for CPU, and a band-limited 3.5 kHz saw for aliasing (energy off the harmonics, below 20 kHz):
 
-| Setting | What runs | CPU (C++, full drive) | Difference from High, worst case |
-|---|---|---|---|
-| High | The whole circuit at 4×, Newton to 1 nV. Bit-identical to the sound before the settings existed. | 0.76× real time | none |
-| Normal | Preamp at 2×; the EQ and fader stages (linear with the EQ flat and the fader at U) at the base rate; Newton to 0.1 µV | 0.34× | octave bands within 0.6 dB; null −32 dB rms at full drive, −46 dB or better from Drive 0.6 down |
-| Eco | Everything at the base rate (the web page's old live sound) | 0.21× | octave bands within 2.2 dB, all of it the top octaves at full drive; null −24 dB rms at full drive |
-| Lite | Not the circuit: the line pad, the preamp gain with C1 as a real capacitor (the bass shelf), a hard clip at U33A's rail, auto level; 4× | 0.005× | octave bands within 0.6 dB up to Drive 0.6, up to 5 dB at full drive; null about −20 dB rms (low-end phase from the coupling caps it leaves out) |
+| Setting | What runs | CPU, bass at full drive | CPU, bright saw at Drive 0.6 | Aliasing, saw at Drive 0.6 / 1 | Difference from High on bass |
+|---|---|---|---|---|---|
+| High | The whole circuit at 4×, Newton to 1 nV. Bit-identical to the sound before the settings existed. | 0.79× real time | 1.24× | −45 / −28 dB | none |
+| Normal | The whole circuit at 3×, Newton to 10 nV | 0.57× | 0.95× | −49 / −25 dB | octave bands within 0.04 dB; null −40 dB rms at worst |
+| Eco | The whole circuit at 2×, Newton to 10 nV | 0.37× | 0.66× | −31 / −21 dB | octave bands within 0.08 dB; null −34 dB rms at worst |
+| Lite | Not the circuit: the line pad, the preamp gain with C1 as a real capacitor (the bass shelf), a hard clip at U33A's rail, auto level; 4× | 0.006× | 0.007× | | octave bands within 0.6 dB up to Drive 0.6, up to 5 dB at full drive; null about −20 dB rms |
 
-The CPU column is one core of the cloud build machine; a Mac is faster. For scale, 4× against 8× differs by −44 dB rms at full drive, so High is itself not the last word there. Every setting has the same 15-sample latency (Eco is padded), so switching does not move a track in a DAW.
+CPU is one core of the cloud build machine; a Mac is faster. Bright, heavily driven material costs about 1.6× what bass does in every circuit setting: the preamp's Newton solver has to rebuild its Jacobian on almost every step while the op-amps slam between their rails. That cost is the circuit, so it can't be capped without changing High's sound. Eco aliases audibly on bright synths at high Drive; it is meant for bass and darker sources. For scale, 8× aliases at −55 / −36 dB.
+
+Every setting has the same 15-sample latency, so switching does not move a track in a DAW.
 
 Two changes apply to every setting and do not change a single sample: the matrix products skip their exact zeros (about half of stage A's entries), and the reported latency is now the filters' real delay, 15 samples (it was 16, from a formula that assumed 15.75).
+
+Tried and dropped (November 2026): running the EQ and fader stages at the base rate (the oversampling filter's ringing changes the top octave by about 0.3 dB at high Drive), running the circuit at 1× (aliasing at −14 dB), and taking the op-amp clamp ports out of Newton while they are far from the rails (5–15% faster, but not when it matters, since bright clipping keeps them near the rails).
 
 ## Validating against a real desk
 

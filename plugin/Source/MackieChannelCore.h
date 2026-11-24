@@ -184,7 +184,7 @@ public:
     void setParams (const Options& o);  // every field but oversample
     void process (const float* input, float* output, int n);
     Peaks readPeaks() { Peaks pk = peaks; peaks = {}; return pk; }
-    double latencySamples() const { return pad.empty() ? ovs.latency() : (double) pad.size(); }
+    double latencySamples() const { return ovs.latency(); }
     double driveNow = 0;
 
 private:
@@ -193,7 +193,7 @@ private:
     void build (bool fresh);
     void processLite (const float* input, float* output, int n);
 
-    double fs; int os; bool split, lite; double tol; double T, Tbc;
+    double fs; int os; bool lite; double tol; double T;
     double vc = 0; // lite: C1 voltage
     Oversampler ovs;
     Options p;
@@ -206,7 +206,7 @@ private:
     int ixHot = 0, ixCold = 0, ixDiff = 0, ixPost = 0, ixMid = 0, ixVa = 0, ixFader = 0;
     std::string topoKey;
     bool changedA = false, changedB = false, changedC = false;
-    std::vector<double> osBuf, pad; size_t padPos = 0;
+    std::vector<double> osBuf;
     Peaks peaks;
     bool pending = false;
 };

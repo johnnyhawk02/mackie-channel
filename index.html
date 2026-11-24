@@ -131,7 +131,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
       <span class="mono" id="gain-readout">+5.9 dB channel gain</span>
     </div>
 
-    <div class="seg" id="quality" role="group" aria-label="Quality" title="High is the full circuit at 4x. Normal and Eco run it at 2x and 1x. Lite is a formula of the circuit.">
+    <div class="seg" id="quality" role="group" aria-label="Quality" title="The whole circuit at 4x (High), 3x (Normal) or 2x (Eco). Less oversampling uses less CPU but aliases more on bright sounds. Lite is a formula of the circuit.">
       <button data-q="lite" aria-pressed="false">Lite</button><button data-q="eco" aria-pressed="false">Eco</button><button data-q="normal" aria-pressed="true">Normal</button><button data-q="high" aria-pressed="false">High</button>
     </div>
 
@@ -185,7 +185,7 @@ select { font: 13px var(--f-body); background: var(--card); color: var(--ink); b
           <li><b>EQ</b>: the full mid (U101A/B with R120/R121 and C114/C115) and the hi/low Baxandall around U105A, set flat.</li>
           <li><b>Fader at U</b>: R107 wiper into U103A, gain 1 + 1K1/510.</li>
         </ol>
-        <p>Op-amps are a macromodel built from datasheet figures: gain-bandwidth, open-loop gain, output swing and output resistance. Values that are not in the manual or a datasheet are stated as assumptions in the README: the 2SA1084 saturation current, the trim pot's taper, the op-amp output resistance, and 0 dBFS = +18 dBu. Parts whose effect is above 90 kHz (small compensation caps, L1) are left out. Quality picks how hard the model works. High runs the whole circuit at 4x oversampling, as the offline renders and the plugin do. Normal runs the preamp at 2x and the EQ and fader at the device rate. Eco runs everything at the device rate. Lite is not the circuit: it is a formula of the preamp's gain, the C1 bass shelf and the U33A rail clip. It is about 100 times cheaper and close at low and mid Drive, but not at full Drive.</p>
+        <p>Op-amps are a macromodel built from datasheet figures: gain-bandwidth, open-loop gain, output swing and output resistance. Values that are not in the manual or a datasheet are stated as assumptions in the README: the 2SA1084 saturation current, the trim pot's taper, the op-amp output resistance, and 0 dBFS = +18 dBu. Parts whose effect is above 90 kHz (small compensation caps, L1) are left out. Quality picks how hard the model works. High runs the whole circuit at 4x oversampling, as the offline renders do; Normal at 3x and Eco at 2x, which use less CPU but alias more on bright, heavily driven sounds. Lite is not the circuit: it is a formula of the preamp's gain, the C1 bass shelf and the U33A rail clip. It is about 100 times cheaper and close at low and mid Drive, but not at full Drive.</p>
       </details>
     </section>
   </div>
