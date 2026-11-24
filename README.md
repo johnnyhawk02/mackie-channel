@@ -91,18 +91,18 @@ The circuit solve is most of the CPU, and stage A (the preamp, 15 nonlinear port
 
 | Setting | What runs | CPU, bass at full drive | CPU, bright saw at Drive 0.6 | Aliasing, saw at Drive 0.6 / 1 | Difference from High on bass |
 |---|---|---|---|---|---|
-| High | The whole circuit at 4×, Newton to 1 nV. Bit-identical to the sound before the settings existed. | 0.79× real time | 1.24× | −45 / −28 dB | none |
+| High | The whole circuit at 4×, Newton to 10 nV | 0.79× real time | 1.24× | −45 / −28 dB | within −108 dBFS of the original 4× render (1 nV), so effectively none |
 | Normal | The whole circuit at 3×, Newton to 10 nV | 0.57× | 0.95× | −49 / −25 dB | octave bands within 0.04 dB; null −40 dB rms at worst |
 | Eco | The whole circuit at 2×, Newton to 10 nV | 0.37× | 0.66× | −31 / −21 dB | octave bands within 0.08 dB; null −34 dB rms at worst |
 | Lite | Not the circuit: the line pad, the preamp gain with C1 as a real capacitor (the bass shelf), a hard clip at U33A's rail, auto level; 4× | 0.006× | 0.007× | | octave bands within 0.6 dB up to Drive 0.6, up to 5 dB at full drive; null about −20 dB rms |
 
-CPU is one core of the cloud build machine; a Mac is faster. Bright, heavily driven material costs about 1.6× what bass does in every circuit setting: the preamp's Newton solver has to rebuild its Jacobian on almost every step while the op-amps slam between their rails. That cost is the circuit, so it can't be capped without changing High's sound. Eco aliases audibly on bright synths at high Drive; it is meant for bass and darker sources. For scale, 8× aliases at −55 / −36 dB.
+CPU is one core of the cloud build machine; a Mac is faster. On an M1, High takes about 0.75× real time on a bright 3.5 kHz saw at full Drive and 0.46× on bass (about 11% less than before the solver tweaks: reciprocal pivots and two partial sums per row in the LU solve and the residual, plus High's Newton tolerance matched to Normal's). Bright, heavily driven material costs about 1.6× what bass does in every circuit setting: the preamp's Newton solver has to rebuild its Jacobian on almost every step while the op-amps slam between their rails. That cost is the circuit, so it can't be capped without changing High's sound. Eco aliases audibly on bright synths at high Drive; it is meant for bass and darker sources. For scale, 8× aliases at −55 / −36 dB.
 
 Every setting has the same 15-sample latency, so switching does not move a track in a DAW.
 
 Two changes apply to every setting and do not change a single sample: the matrix products skip their exact zeros (about half of stage A's entries), and the reported latency is now the filters' real delay, 15 samples (it was 16, from a formula that assumed 15.75).
 
-Tried and dropped (November 2026): running the EQ and fader stages at the base rate (the oversampling filter's ringing changes the top octave by about 0.3 dB at high Drive), running the circuit at 1× (aliasing at −14 dB), and taking the op-amp clamp ports out of Newton while they are far from the rails (5–15% faster, but not when it matters, since bright clipping keeps them near the rails).
+Tried and dropped (November 2026): running the EQ and fader stages at the base rate (the oversampling filter's ringing changes the top octave by about 0.3 dB at high Drive), running the circuit at 1× (aliasing at −14 dB), and taking the op-amp clamp ports out of Newton while they are far from the rails (5–15% faster, but not when it matters, since bright clipping keeps them near the rails), a column-major LU (20% faster on x86 but 10% slower on the M1), extrapolating the Newton start point (slower on bright material), reusing the Jacobian longer (more iterations, slower) and stopping Newton on a predicted error (the saving needs a loose test, which moves the output to about −70 dB).
 
 ## Validating against a real desk
 

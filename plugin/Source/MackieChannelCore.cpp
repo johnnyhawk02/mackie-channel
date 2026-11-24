@@ -97,7 +97,7 @@ static double pnjlim (double vnew, double vold, double vt, double vcrit)
     return vnew;
 }
 
-static void luFactor (double* A, int n, int* perm) // in place, partial pivoting
+static void luFactor (double* A, int n, int* perm, double* inv) // in place, partial pivoting; inv = 1 / the pivots
 {
     for (int i = 0; i < n; i++) perm[i] = i;
     for (int c = 0; c < n; c++)
@@ -111,7 +111,7 @@ static void luFactor (double* A, int n, int* perm) // in place, partial pivoting
         }
         double d = A[c * n + c];
         if (d == 0 || std::isnan (d)) d = 1e-30; // JS: A[c*n+c] || 1e-30
-        A[c * n + c] = d;
+        A[c * n + c] = d; inv[c] = 1 / d;
         for (int r = c + 1; r < n; r++)
         {
             const double f = A[r * n + c] / d; A[r * n + c] = f; if (f == 0) continue;
@@ -120,12 +120,25 @@ static void luFactor (double* A, int n, int* perm) // in place, partial pivoting
     }
 }
 
-static void luSolve (const double* A, double* b, int n, const int* perm)
+static void luSolve (const double* A, double* b, int n, const int* perm, const double* inv)
 {
     double y[256];
     for (int i = 0; i < n; i++) y[i] = b[perm[i]];
-    for (int i = 0; i < n; i++) { double s = y[i]; for (int j = 0; j < i; j++) s -= A[i * n + j] * y[j]; y[i] = s; }
-    for (int i = n - 1; i >= 0; i--) { double s = y[i]; for (int j = i + 1; j < n; j++) s -= A[i * n + j] * y[j]; y[i] = s / A[i * n + i]; }
+    // two interleaved partial sums per row: half the dependency chain
+    for (int i = 0; i < n; i++)
+    {
+        const double* Ai = A + i * n; double s0 = 0, s1 = 0; int j = 0;
+        for (; j + 1 < i; j += 2) { s0 += Ai[j] * y[j]; s1 += Ai[j + 1] * y[j + 1]; }
+        if (j < i) s0 += Ai[j] * y[j];
+        y[i] = y[i] - (s0 + s1);
+    }
+    for (int i = n - 1; i >= 0; i--)
+    {
+        const double* Ai = A + i * n; double s0 = 0, s1 = 0; int j = i + 1;
+        for (; j + 1 < n; j += 2) { s0 += Ai[j] * y[j]; s1 += Ai[j + 1] * y[j + 1]; }
+        if (j < n) s0 += Ai[j] * y[j];
+        y[i] = (y[i] - (s0 + s1)) * inv[i];
+    }
     for (int i = 0; i < n; i++) b[i] = y[i];
 }
 
@@ -243,7 +256,7 @@ Circuit::Circuit (std::shared_ptr<Netlist> net_, double T_, int fineLevels, bool
     Ah.assign (r * r, 0); Au.assign (r * q, 0); Ai.assign (r * m, 0);
     Oh.assign (o * r, 0); Ou.assign (o * q, 0); Oi.assign (o * m, 0);
     Mm.assign (N * N, 0); S.assign (N * N, 0); Minv.assign (N * 2 * N, 0); tmp.assign (N, 0);
-    J.assign (r, 0); v.assign (m, 0); i.assign (m, 0); p.assign (m, 0); f.assign (m, 0); jac.assign (m * m, 0);
+    J.assign (r, 0); v.assign (m, 0); i.assign (m, 0); p.assign (m, 0); f.assign (m, 0); jac.assign (m * m, 0); invPiv.assign (m, 0);
     dI.assign (m * 2, 0); dx.assign (m, 0); y.assign (o, 0); vr.assign (r, 0); perm.assign (m, 0);
     vtmp.assign (m, 0); ftmp.assign (m, 0); sx.assign (m, 0); physI.assign (r, 0); vSave.assign (m, 0);
     uPrev.assign (q, 0); u0.assign (q, 0); ui.assign (q, 0); z.assign (r + q + m, 0);
@@ -402,9 +415,10 @@ double Circuit::residual (double* fo)
     double nrm = 0;
     for (int k = 0; k < m; k++)
     {
-        double s = 0; const int row = k * m;
-        for (int j = 0; j < m; j++) s += K[row + j] * i[j];
-        const double rr = v[k] - p[k] - s; fo[k] = rr; nrm += rr * rr;
+        const double* Kk = K.data() + k * m; double s0 = 0, s1 = 0; int j = 0;
+        for (; j + 1 < m; j += 2) { s0 += Kk[j] * i[j]; s1 += Kk[j + 1] * i[j + 1]; }
+        if (j < m) s0 += Kk[j] * i[j];
+        const double rr = v[k] - p[k] - (s0 + s1); fo[k] = rr; nrm += rr * rr;
     }
     return nrm;
 }
@@ -424,7 +438,7 @@ void Circuit::factor()
             for (int k = 0; k < m; k++) jac[k * m + c] -= K[k * m + col] * g;
         }
     }
-    luFactor (jac.data(), m, perm.data());
+    luFactor (jac.data(), m, perm.data(), invPiv.data());
     factored = true;
 }
 
@@ -454,7 +468,7 @@ bool Circuit::solve (const double* u, int maxIt)
         {
             if (! factored) { factor(); fresh = true; } else fresh = false;
             for (int k = 0; k < m; k++) dx[k] = -f[k];
-            luSolve (jac.data(), dx.data(), m, perm.data());
+            luSolve (jac.data(), dx.data(), m, perm.data(), invPiv.data());
             ndx = 0; for (int k = 0; k < m; k++) ndx += dx[k] * dx[k];
         }
         else fresh = false;
@@ -503,7 +517,7 @@ bool Circuit::solve (const double* u, int maxIt)
             }
             residual (f1);
             for (int k = 0; k < m; k++) sx[k] = -f1[k];
-            luSolve (jac.data(), sx.data(), m, perm.data());
+            luSolve (jac.data(), sx.data(), m, perm.data(), invPiv.data());
             ns = 0; for (int k = 0; k < m; k++) ns += sx[k] * sx[k];
             if (ns < ndx * (1 - alpha / 4) || ns < tolm) { accepted = true; contract = ns / ndx; break; }
             alpha *= 0.5;
@@ -792,7 +806,7 @@ static int qualityOs (const Options& o)
 
 MackieChannel::MackieChannel (double sampleRate, const Options& opts)
     : fs (sampleRate), os (qualityOs (opts)), lite (opts.quality == Options::Lite),
-      tol (opts.quality == Options::Normal || opts.quality == Options::Eco || opts.quality == Options::Lite ? 1e-16 : 1e-18),
+      tol (opts.quality == Options::None ? 1e-18 : 1e-16), // None: the plain oversample factor, the original reference tolerance
       T (1 / (fs * os)), ovs (os), p (opts),
       P (std::make_shared<CircuitValues>())
 {

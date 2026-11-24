@@ -214,7 +214,7 @@
         this.J = new Float64Array(r); this.v = new Float64Array(m); this.i = new Float64Array(m);
         this.p = new Float64Array(m); this.f = new Float64Array(m); this.jac = new Float64Array(m * m);
         this.dI = new Float64Array(m * 2); this.dx = new Float64Array(m); this.y = new Float64Array(o);
-        this.vr = new Float64Array(r); this.perm = new Int32Array(m);
+        this.vr = new Float64Array(r); this.perm = new Int32Array(m); this.invPiv = new Float64Array(m);
         this.vtmp = new Float64Array(m); this.ftmp = new Float64Array(m); this.sx = new Float64Array(m); this.factored = false;
         this.physI = new Float64Array(r); this.vSave = new Float64Array(m); this.uPrev = new Float64Array(q);
         this.iters = 0; this.fails = 0; this.substeps = 0;
@@ -288,7 +288,10 @@
       let nrm = 0;
       for (let k = 0; k < m; k++) {
         let s = 0; const row = k * m;
-        for (let j = 0; j < m; j++) s += K[row + j] * i[j];
+        let s0 = 0, s1 = 0, j = 0; // two interleaved partial sums (as the C++: a shorter dependency chain)
+        for (; j + 1 < m; j += 2) { s0 += K[row + j] * i[j]; s1 += K[row + j + 1] * i[j + 1]; }
+        if (j < m) s0 += K[row + j] * i[j];
+        s = s0 + s1;
         const r = v[k] - p[k] - s; f[k] = r; nrm += r * r;
       }
       return nrm;
@@ -307,7 +310,7 @@
           for (let k = 0; k < m; k++) jac[k * m + c] -= K[k * m + col] * g;
         }
       }
-      luFactor(jac, m, this.perm);
+      luFactor(jac, m, this.perm, this.invPiv);
       this.factored = true;
     }
 
@@ -337,7 +340,7 @@
         if (!haveDx) {
           if (!this.factored) { this.factor(); fresh = true; } else fresh = false;
           for (let k = 0; k < m; k++) dx[k] = -f[k];
-          luSolve(this.jac, dx, m, this.perm);
+          luSolve(this.jac, dx, m, this.perm, this.invPiv);
           ndx = 0; for (let k = 0; k < m; k++) ndx += dx[k] * dx[k];
         } else fresh = false;
         haveDx = false;
@@ -376,7 +379,7 @@
           }
           this.residual(f1);
           for (let k = 0; k < m; k++) sx[k] = -f1[k];
-          luSolve(this.jac, sx, m, this.perm);
+          luSolve(this.jac, sx, m, this.perm, this.invPiv);
           ns = 0; for (let k = 0; k < m; k++) ns += sx[k] * sx[k];
           if (ns < ndx * (1 - alpha / 4) || ns < tol) { accepted = true; this.contract = ns / ndx; break; }
           alpha *= 0.5;
@@ -505,13 +508,13 @@
     }
     return vnew;
   }
-  function luFactor(A, n, perm) { // in place, partial pivoting, row permutation in perm
+  function luFactor(A, n, perm, inv) { // in place, partial pivoting, row permutation in perm, inv = 1 / the pivots
     for (let i = 0; i < n; i++) perm[i] = i;
     for (let c = 0; c < n; c++) {
       let p = c, best = Math.abs(A[c * n + c]);
       for (let r = c + 1; r < n; r++) { const v = Math.abs(A[r * n + c]); if (v > best) { best = v; p = r; } }
       if (p !== c) { for (let j = 0; j < n; j++) { const t = A[c * n + j]; A[c * n + j] = A[p * n + j]; A[p * n + j] = t; } const t = perm[c]; perm[c] = perm[p]; perm[p] = t; }
-      const d = A[c * n + c] || 1e-30; A[c * n + c] = d;
+      const d = A[c * n + c] || 1e-30; A[c * n + c] = d; inv[c] = 1 / d;
       for (let r = c + 1; r < n; r++) {
         const f = A[r * n + c] / d; A[r * n + c] = f; if (f === 0) continue;
         for (let j = c + 1; j < n; j++) A[r * n + j] -= f * A[c * n + j];
@@ -519,13 +522,24 @@
     }
   }
   const luTmp = new Float64Array(256);
-  function luSolve(A, b, n, perm) {
+  function luSolve(A, b, n, perm, inv) { // two interleaved partial sums per row, as the C++
     const y = luTmp;
     for (let i = 0; i < n; i++) y[i] = b[perm[i]];
-    for (let i = 0; i < n; i++) { let s = y[i]; for (let j = 0; j < i; j++) s -= A[i * n + j] * y[j]; y[i] = s; }
-    for (let i = n - 1; i >= 0; i--) { let s = y[i]; for (let j = i + 1; j < n; j++) s -= A[i * n + j] * y[j]; y[i] = s / A[i * n + i]; }
+    for (let i = 0; i < n; i++) {
+      const row = i * n; let s0 = 0, s1 = 0, j = 0;
+      for (; j + 1 < i; j += 2) { s0 += A[row + j] * y[j]; s1 += A[row + j + 1] * y[j + 1]; }
+      if (j < i) s0 += A[row + j] * y[j];
+      y[i] = y[i] - (s0 + s1);
+    }
+    for (let i = n - 1; i >= 0; i--) {
+      const row = i * n; let s0 = 0, s1 = 0, j = i + 1;
+      for (; j + 1 < n; j += 2) { s0 += A[row + j] * y[j]; s1 += A[row + j + 1] * y[j + 1]; }
+      if (j < n) s0 += A[row + j] * y[j];
+      y[i] = (y[i] - (s0 + s1)) * inv[i];
+    }
     for (let i = 0; i < n; i++) b[i] = y[i];
   }
+
 
 
   function designLowpass(taps, cutoff, factor) {
