@@ -127,7 +127,7 @@ private:
     std::vector<double> Dh, Du, K, Ah, Au, Ai, Oh, Ou, Oi;
     std::vector<double> Mm, S, Minv, tmp;
     std::vector<double> J, v, i, p, f, jac, dI, dx, vr, vtmp, ftmp, sx, physI, vSave, uPrev, u0, ui;
-    std::vector<int> perm;
+    std::vector<int> perm; std::vector<double> invPiv;
     bool factored = false;
     double contract = 0, tol = 1e-18;
     Sparse sP, sR, sO;
