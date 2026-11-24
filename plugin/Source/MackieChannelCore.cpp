@@ -751,6 +751,7 @@ Oversampler::Oversampler (int factor_, int tpp_) : factor (factor_), tpp (tpp_),
 {
     // the presets' filters come from the JS bit for bit (OversamplerTaps.h)
     if (factor == 2 && tpp == 16) h.assign (TAPS_2x16, TAPS_2x16 + 32);
+    else if (factor == 3 && tpp == 16) h.assign (TAPS_3x16, TAPS_3x16 + 48);
     else if (factor == 4 && tpp == 16) h.assign (TAPS_4x16, TAPS_4x16 + 64);
     else h = designLowpass (taps, 0.9, factor);
     upBuf.assign (tpp * 2, 0); downBuf.assign (taps * 2, 0); outBuf.assign (factor, 0);
@@ -779,26 +780,23 @@ double Oversampler::down (const double* arr, int n)
 // ============================================================================
 Options::Options() : fullScaleVolts (0.7746 * jsmath::pow (10.0, 18.0 / 20) * 1.4142135623730951) {}
 
-// Quality presets, as QUALITY in the JS core: high 4x; normal 2x with the EQ
-// and fader at the base rate; eco 1x. Normal and eco stop Newton at 1e-7 V.
-static constexpr int QUALITY_LATENCY = 15;
+// Quality presets, as QUALITY in the JS core: the whole circuit at 4x (high),
+// 3x (normal) or 2x (eco); normal and eco stop Newton at 1e-8 V. Lite: a formula at 4x.
 static int qualityOs (const Options& o)
 {
     if (o.quality == Options::High || o.quality == Options::Lite) return 4;
-    if (o.quality == Options::Normal) return 2;
-    if (o.quality == Options::Eco) return 1;
+    if (o.quality == Options::Normal) return 3;
+    if (o.quality == Options::Eco) return 2;
     return o.oversample > 0 ? o.oversample : 1;
 }
 
 MackieChannel::MackieChannel (double sampleRate, const Options& opts)
-    : fs (sampleRate), os (qualityOs (opts)), split (opts.quality == Options::Normal), lite (opts.quality == Options::Lite),
-      tol (opts.quality == Options::Normal || opts.quality == Options::Eco || opts.quality == Options::Lite ? 1e-14 : 1e-18),
-      T (1 / (fs * os)), Tbc (split ? 1 / fs : T), ovs (os), p (opts),
+    : fs (sampleRate), os (qualityOs (opts)), lite (opts.quality == Options::Lite),
+      tol (opts.quality == Options::Normal || opts.quality == Options::Eco || opts.quality == Options::Lite ? 1e-16 : 1e-18),
+      T (1 / (fs * os)), ovs (os), p (opts),
       P (std::make_shared<CircuitValues>())
 {
     p.oversample = os;
-    // a preset without oversampling is delayed to the same latency as the others
-    if (opts.quality != Options::None && os == 1) pad.assign (QUALITY_LATENCY, 0.0);
     driveNow = driveMid = p.drive;
     slewCount = 0;
     derive();
@@ -830,15 +828,15 @@ void MackieChannel::build (bool fresh)
     {
         topoKey = key;
         A = std::make_unique<Circuit> (stageA (P), T);
-        B = std::make_unique<Circuit> (stageB (P), Tbc);
-        C = std::make_unique<Circuit> (stageC (P), Tbc);
+        B = std::make_unique<Circuit> (stageB (P), T);
+        C = std::make_unique<Circuit> (stageC (P), T);
         A->setTol (tol); B->setTol (tol); C->setTol (tol);
         uA[0] = uA[1] = 0; uB[0] = 0; uC[0] = 0;
         A->settle (uA.data(), T);
         uB[0] = A->y[A->outIndex ("diff")];
-        B->settle (uB.data(), Tbc);
+        B->settle (uB.data(), T);
         uC[0] = B->y[B->outIndex ("post")];
-        C->settle (uC.data(), Tbc);
+        C->settle (uC.data(), T);
         ixHot = A->outIndex ("pre_hot"); ixCold = A->outIndex ("pre_cold"); ixDiff = A->outIndex ("diff");
         ixPost = B->outIndex ("post"); ixMid = B->outIndex ("eqmid"); ixVa = B->outIndex ("va");
         ixFader = C->outIndex ("fader");
@@ -846,8 +844,8 @@ void MackieChannel::build (bool fresh)
     else
     {
         if (changedA) A->setT (T);
-        if (changedB) B->setT (Tbc);
-        if (changedC) C->setT (Tbc);
+        if (changedB) B->setT (T);
+        if (changedC) C->setT (T);
     }
     changedA = changedB = changedC = false;
 }
@@ -906,7 +904,6 @@ void MackieChannel::process (const float* input, float* output, int n)
             const auto& ya = cA.y;
             const double ph = std::max (std::abs (ya[ixHot]), std::abs (ya[ixCold])); if (ph > peaks.pre) peaks.pre = ph;
             const double d = ya[ixDiff]; if (std::abs (d) > peaks.diff) peaks.diff = std::abs (d);
-            if (split) { buf[k] = d; continue; }
             uB[0] = d; cB.step (uB.data());
             const auto& yb = cB.y;
             const double pe = std::max ({ std::abs (yb[ixPost]), std::abs (yb[ixMid]), std::abs (yb[ixVa]) }); if (pe > peaks.eq) peaks.eq = pe;
@@ -914,20 +911,7 @@ void MackieChannel::process (const float* input, float* output, int n)
             const double fo = cC.y[ixFader]; if (std::abs (fo) > peaks.fader) peaks.fader = std::abs (fo);
             buf[k] = fo;
         }
-        double out;
-        if (split)
-        {
-            // the EQ and fader stages stay linear with the EQ flat and the fader at U, so they run at the base rate
-            uB[0] = ovs.down (buf, os); cB.step (uB.data());
-            const auto& yb = cB.y;
-            const double pe = std::max ({ std::abs (yb[ixPost]), std::abs (yb[ixMid]), std::abs (yb[ixVa]) }); if (pe > peaks.eq) peaks.eq = pe;
-            uC[0] = yb[ixPost]; cC.step (uC.data());
-            out = cC.y[ixFader]; if (std::abs (out) > peaks.fader) peaks.fader = std::abs (out);
-        }
-        else out = ovs.down (buf, os);
-        out *= outGain;
-        if (! pad.empty()) { const double t = pad[padPos]; pad[padPos] = out; padPos = (padPos + 1) % pad.size(); out = t; }
-        output[s] = (float) out;
+        output[s] = (float) (ovs.down (buf, os) * outGain);
     }
 }
 
