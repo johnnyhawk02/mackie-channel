@@ -15,7 +15,7 @@ cmake -S plugin -B plugin/build -DCMAKE_BUILD_TYPE=Release
 cmake --build plugin/build --target Colourbox_VST3 -j8
 ```
 
-The build copies `Colourbox.vst3` to `~/Library/Audio/Plug-Ins/VST3/Johnny/`. JUCE 8.0.10 comes from `~/Developer/Plugins/JUCE`; pass `-DJUCE_DIR=...` to use another copy. The `snapshot` target renders the editor to a PNG: `plugin/build/snapshot_artefacts/Release/snapshot knob.png 0.35`.
+The build copies `Colourbox.vst3` to `~/Library/Audio/Plug-Ins/VST3/Johnny Hawk/`. JUCE 8.0.10 comes from `~/Developer/Plugins/JUCE`; pass `-DJUCE_DIR=...` to use another copy. The `snapshot` target renders the editor to a PNG: `plugin/build/snapshot_artefacts/Release/snapshot knob.png 0.35`.
 
 ## Null test
 

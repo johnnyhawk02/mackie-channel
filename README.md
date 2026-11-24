@@ -82,7 +82,7 @@ The meter taps and everything after U103A are not modelled.
 
   `renders/` holds the four test samples at drive 0.15, 0.3 and 0.6, rendered at 4× oversampling.
 
-- **VST3:** `Colourbox`, built from `plugin/` and installed to `~/Library/Audio/Plug-Ins/VST3/Johnny/`. It has the Drive knob and a Quality setting (High by default). See `plugin/README.md`.
+- **VST3:** `Colourbox`, built from `plugin/` and installed to `~/Library/Audio/Plug-Ins/VST3/Johnny Hawk/`. It has the Drive knob and a Quality setting (High by default). See `plugin/README.md`.
 - **Core API:** `new MackieChannel(sampleRate, { quality: 'lite'|'eco'|'normal'|'high', drive, input: 'line'|'mic', loCut, eqHigh, eqMid, eqLow, eqFreq, faderDb, outputDb, fullScaleVolts, autoLevel, driveSlewMs, oversample })`, then `process(input, output)`, `setParams({...})`, `readPeaks()` and `info()`.
 
 ## Quality settings

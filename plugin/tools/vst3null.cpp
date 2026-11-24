@@ -24,7 +24,7 @@ int main (int argc, char** argv)
     juce::AudioPluginFormatManager fm;
     fm.addFormat (new juce::VST3PluginFormat());
     const auto path = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
-                          .getChildFile ("Library/Audio/Plug-Ins/VST3/Johnny/Colourbox.vst3").getFullPathName();
+                          .getChildFile ("Library/Audio/Plug-Ins/VST3/Johnny Hawk/Colourbox.vst3").getFullPathName();
     juce::OwnedArray<juce::PluginDescription> types;
     juce::VST3PluginFormat vst3;
     vst3.findAllTypesForFile (types, path);
