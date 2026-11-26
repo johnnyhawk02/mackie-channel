@@ -7,62 +7,21 @@
 namespace
 {
     // the web page's dark theme
-    const juce::Colour panel (0xff2a3033), ink (0xffe7e9e4), inkSoft (0xff9aa4a7), accent (0xffea6a2c),
-                       cap (0xff101315), capHi (0xff2a3134), pointer (0xfff1eee4);
+    const juce::Colour bench (0xff15191b), inkSoft (0xff9aa4a7), accent (0xffea6a2c);
 
-    constexpr float a0 = -135.0f, a1 = 135.0f; // knob travel in degrees, as on the page
-    constexpr int size = 236;                  // the page's knob area, in its own units
-    constexpr int row = 30;                    // the Quality row under the knob, and the Circuit row over it
-    constexpr int screenWidth = 404;           // the pictures, left of the knob, as tall as the editor
+    constexpr int width = 420, screenHeight = 300; // the picture with the knob at its centre
+    constexpr int row = 30;                        // the Circuit row over it and the Quality row under it
 
     void styleRowButton (juce::TextButton& b)
     {
         b.setClickingTogglesState (false);
-        b.setColour (juce::TextButton::buttonColourId, panel);
-        b.setColour (juce::TextButton::buttonOnColourId, panel);
+        b.setColour (juce::TextButton::buttonColourId, bench);
+        b.setColour (juce::TextButton::buttonOnColourId, bench);
         b.setColour (juce::TextButton::textColourOffId, inkSoft);
         b.setColour (juce::TextButton::textColourOnId, accent);
         b.setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
         b.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
     }
-}
-
-void DriveKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
-                                      float, float, juce::Slider&)
-{
-    // the page's SVG: viewBox 0 0 236 236, centre 118
-    const float s = (float) juce::jmin (width, height) / size;
-    const juce::Point<float> c ((float) x + width * 0.5f, (float) y + height * 0.5f);
-    auto disc = [&] (float r, juce::Colour col) { g.setColour (col); g.fillEllipse (c.x - r * s, c.y - r * s, 2 * r * s, 2 * r * s); };
-
-    // scale: 41 fine ticks, then 0 to 10 at the marks
-    for (int i = 0; i <= 40; i++)
-    {
-        const float a = juce::degreesToRadians (a0 + i / 40.0f * (a1 - a0));
-        const float r0 = 78, r1 = i % 5 ? 83.0f : 86.0f;
-        g.setColour (inkSoft);
-        g.drawLine (c.x + r0 * s * std::sin (a), c.y - r0 * s * std::cos (a),
-                    c.x + r1 * s * std::sin (a), c.y - r1 * s * std::cos (a), 1.2f * s);
-    }
-    g.setFont (juce::FontOptions (14.0f * s, juce::Font::bold));
-    // every circuit shows 0 to 10, as on the circuits page
-    for (int m = 0; m <= 10; m += 2)
-    {
-        const float a = juce::degreesToRadians (a0 + m / 10.0f * (a1 - a0));
-        const juce::Point<float> p (c.x + 101 * s * std::sin (a), c.y - 101 * s * std::cos (a));
-        g.setColour (ink);
-        g.drawText (juce::String (m), juce::Rectangle<float> (40 * s, 18 * s).withCentre (p), juce::Justification::centred);
-    }
-
-    disc (70, accent);
-    disc (64, cap);
-    disc (52, capHi);
-    // pointer: rect x 115.5 y 56 w 5 h 34 rx 2.5, rotated about the centre
-    juce::Path ptr;
-    ptr.addRoundedRectangle (c.x - 2.5f * s, c.y - 62 * s, 5 * s, 34 * s, 2.5f * s);
-    ptr.applyTransform (juce::AffineTransform::rotation (juce::degreesToRadians (a0 + sliderPos * (a1 - a0)), c.x, c.y));
-    g.setColour (pointer);
-    g.fillPath (ptr);
 }
 
 ColourboxEditor::ColourboxEditor (ColourboxProcessor& p)
@@ -74,27 +33,25 @@ ColourboxEditor::ColourboxEditor (ColourboxProcessor& p)
                   {
                       screenReady = true;
                       sentDrive = -1.0f; // send everything again
-                      // for tests: the page only says ready once WebGL is up and all five pictures are built
+                      // for tests: the page only says ready once WebGL is up and the picture is built
                       if (auto* f = std::getenv ("COLOURBOX_READY_FILE")) juce::File (f).replaceWithText ("ready");
                   })
-                  .withEventListener ("view", [&p] (const juce::var& v)
+                  .withEventListener ("gesture", [this] (const juce::var& v)
                   {
-                      // which picture is not a parameter: it is kept with the plugin's state, like a window size
-                      p.apvts.state.setProperty ("view", juce::jlimit (0, 4, (int) v.getProperty ("index", 0)), nullptr);
+                      const bool on = (bool) v.getProperty ("active", false);
+                      if (on != dragging) { dragging = on; on ? driveParam->beginChangeGesture() : driveParam->endChangeGesture(); }
+                  })
+                  .withEventListener ("drive", [this] (const juce::var& v)
+                  {
+                      const float value = juce::jlimit (0.0f, 1.0f, (float) (double) v.getProperty ("value", 0.0));
+                      driveParam->setValueNotifyingHost (driveParam->convertTo0to1 (value));
+                      sentDrive = driveParam->convertFrom0to1 (driveParam->getValue()); // the page already shows it
                   }))
 {
     addAndMakeVisible (screen);
     screen.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
-    knob.setLookAndFeel (&look);
-    knob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    knob.setMouseDragSensitivity (260); // the page: 260 px of drag for the whole travel
-    knob.setPopupDisplayEnabled (true, true, this);
-    knob.setTooltip ("Drive");
-    attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, "drive", knob);
-    knob.setDoubleClickReturnValue (true, 0.0); // the page: double-click goes back to 0
-    addAndMakeVisible (knob);
+    driveParam = p.apvts.getParameter ("drive");
 
     auto* param = p.apvts.getParameter ("quality");
     qualityAttachment = std::make_unique<juce::ParameterAttachment> (*param, [this] (float v) { showQuality ((int) v); });
@@ -123,7 +80,7 @@ ColourboxEditor::ColourboxEditor (ColourboxProcessor& p)
         addAndMakeVisible (b);
     }
     circuitAttachment->sendInitialUpdate();
-    setSize (screenWidth + size, size + 2 * row);
+    setSize (width, screenHeight + 2 * row);
     startTimerHz (30);
 }
 
@@ -148,21 +105,17 @@ void ColourboxEditor::timerCallback()
     auto& apvts = static_cast<ColourboxProcessor&> (processor).apvts;
     const float drive = apvts.getRawParameterValue ("drive")->load();
     const int circuitIndex = (int) apvts.getRawParameterValue ("circuit")->load();
-    const int view = (int) apvts.state.getProperty ("view", 0);
-    if (drive == sentDrive && circuitIndex == sentCircuit && view == sentView) return;
-    sentDrive = drive; sentCircuit = circuitIndex; sentView = view;
+    if (drive == sentDrive && circuitIndex == sentCircuit) return;
+    sentDrive = drive; sentCircuit = circuitIndex;
     auto* o = new juce::DynamicObject();
     o->setProperty ("drive", drive);
     o->setProperty ("circuit", circuitIndex);
-    o->setProperty ("view", view);
     screen.emitEventIfBrowserIsVisible ("state", juce::var (o));
 }
 
 void ColourboxEditor::showCircuit (int index)
 {
     for (int i = 0; i < 4; i++) circuit[i].setToggleState (i == index, juce::dontSendNotification);
-    look.circuit = index;
-    knob.repaint();
 }
 
 void ColourboxEditor::showQuality (int index)
@@ -173,25 +126,24 @@ void ColourboxEditor::showQuality (int index)
 ColourboxEditor::~ColourboxEditor()
 {
     stopTimer();
-    knob.setLookAndFeel (nullptr);
+    if (dragging) driveParam->endChangeGesture();
 }
 
 void ColourboxEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (panel);
+    g.fillAll (bench);
 }
 
 void ColourboxEditor::resized()
 {
     auto r = getLocalBounds();
-    screen.setBounds (r.removeFromLeft (screenWidth));
+    auto layRow = [] (juce::Rectangle<int> area, juce::TextButton* buttons)
     {
-        auto top = r.removeFromTop (row).withSizeKeepingCentre (size - 24, row - 8).translated (0, 4);
-        const int w = top.getWidth() / 4;
-        for (auto& b : circuit) b.setBounds (top.removeFromLeft (w));
-    }
-    knob.setBounds (r.removeFromTop (size));
-    r = r.withSizeKeepingCentre (size - 40, row - 8).translated (0, -12);
-    const int w = r.getWidth() / 4;
-    for (auto& b : quality) b.setBounds (r.removeFromLeft (w));
+        area = area.withSizeKeepingCentre (280, row - 8);
+        const int w = area.getWidth() / 4;
+        for (int i = 0; i < 4; i++) buttons[i].setBounds (area.removeFromLeft (w));
+    };
+    layRow (r.removeFromTop (row).translated (0, 3), circuit);
+    layRow (r.removeFromBottom (row).translated (0, -3), quality);
+    screen.setBounds (r);
 }

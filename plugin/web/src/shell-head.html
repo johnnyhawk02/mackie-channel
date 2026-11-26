@@ -11,19 +11,13 @@
 }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); -webkit-user-select: none; user-select: none; cursor: default }
 .stage { position: absolute; inset: 0 }
-.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; cursor: ns-resize; touch-action: none }
 .fallback { position: absolute; inset: 0; margin: auto; height: max-content; text-align: center; color: var(--ink-soft); font: 13px -apple-system, sans-serif }
-.tabs { position: absolute; left: 12px; top: 6px; display: flex; gap: 14px }
-.tabs button { font: 500 13px/1 var(--f-display); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-soft);
-  background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 0 4px; cursor: pointer }
-.tabs button:hover { color: var(--ink) }
-.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent) }
 </style></head><body>
 <main class="stage" id="stage">
   <canvas id="gl"></canvas>
   <p class="fallback" id="fallback" hidden>The pictures need WebGL.</p>
 </main>
-<nav class="tabs" id="tabs"></nav>
 <script type="module">
 import * as THREE from './three.module.min.js';
 (() => {

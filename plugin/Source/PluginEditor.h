@@ -5,17 +5,8 @@
 #include "PluginProcessor.h"
 #include <optional>
 
-// A Circuit row, the Drive knob from the web page (the orange-ringed trim knob,
-// 0 to 10) and a small Quality row under it, with the three.js pictures
-// (web/graphics.html) in a web view to their left.
-class DriveKnobLook : public juce::LookAndFeel_V4
-{
-public:
-    int circuit = 0;
-    void drawRotarySlider (juce::Graphics&, int x, int y, int width, int height, float sliderPos,
-                           float startAngle, float endAngle, juce::Slider&) override;
-};
-
+// A Circuit row, the Partials picture from the three.js studies (web/graphics.html,
+// in a web view) with the Drive knob at its centre, and a small Quality row.
 class ColourboxEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -26,19 +17,18 @@ public:
     void resized() override;
 
 private:
-    DriveKnobLook look;
-    juce::Slider knob;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+    juce::RangedAudioParameter* driveParam = nullptr;
+    bool dragging = false; // a Drive gesture from the picture is open
     juce::TextButton quality[4], circuit[4];
     std::unique_ptr<juce::ParameterAttachment> qualityAttachment, circuitAttachment;
     void showQuality (int index);
     void showCircuit (int index);
 
-    // the pictures: Drive, Circuit and the chosen picture go in at up to 30 Hz, a picture choice comes back
+    // the picture: Drive and Circuit go in at up to 30 Hz; dragging it sends Drive back
     juce::WebBrowserComponent screen;
     bool screenReady = false;
     float sentDrive = -1.0f;
-    int sentCircuit = -1, sentView = -1;
+    int sentCircuit = -1;
     std::optional<juce::WebBrowserComponent::Resource> serve (const juce::String& url);
     void timerCallback() override;
 

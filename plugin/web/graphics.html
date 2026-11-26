@@ -11,19 +11,13 @@
 }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); -webkit-user-select: none; user-select: none; cursor: default }
 .stage { position: absolute; inset: 0 }
-.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; cursor: ns-resize; touch-action: none }
 .fallback { position: absolute; inset: 0; margin: auto; height: max-content; text-align: center; color: var(--ink-soft); font: 13px -apple-system, sans-serif }
-.tabs { position: absolute; left: 12px; top: 6px; display: flex; gap: 14px }
-.tabs button { font: 500 13px/1 var(--f-display); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-soft);
-  background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 0 4px; cursor: pointer }
-.tabs button:hover { color: var(--ink) }
-.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent) }
 </style></head><body>
 <main class="stage" id="stage">
   <canvas id="gl"></canvas>
   <p class="fallback" id="fallback" hidden>The pictures need WebGL.</p>
 </main>
-<nav class="tabs" id="tabs"></nav>
 <script type="module">
 import * as THREE from './three.module.min.js';
 (() => {
@@ -149,186 +143,6 @@ function boxEdges(h, o) {                           // the twelve edges of a cub
   s.commit(); return s;
 }
 
-/* ---- A. Clip: a sphere pushed through the circuit's transfer curve ---- */
-function makeClip() {
-  const group = new THREE.Group(), spin = new THREE.Group(); group.add(spin); group.rotation.x = 0.36;
-  const n = 11000, K = 129, tix = new Float32Array(n * 3), T = new Float32Array(K), CL = new Float32Array(K), sinT = new Float32Array(K);
-  for (let j = 0; j < K; j++) sinT[j] = Math.sin(-Math.PI / 2 + Math.PI * j / (K - 1));
-  for (let i = 0; i < n; i++) {                     // evenly spread directions (golden-angle spiral)
-    const y = 1 - 2 * (i + .5) / n, r = Math.sqrt(1 - y * y), a = i * Math.PI * (3 - Math.sqrt(5)), u = [Math.cos(a) * r, y, Math.sin(a) * r];
-    for (let k = 0; k < 3; k++) tix[i * 3 + k] = (Math.asin(u[k]) / Math.PI + .5) * (K - 1);
-  }
-  const GT = [], HT = [];                          // distortion of a tanh clipper at each gain, to turn a measured THD back into a gain
-  for (let gg = 0; gg <= 12.01; gg += .25) {
-    let f = 0, r = 0;
-    for (let k = 0; k < 256; k++) { const y = Math.tanh(gg * Math.sin(TAU * (k + .5) / 256)); f += y * Math.sin(TAU * (k + .5) / 256); r += y * y; }
-    const p1 = 2 * (f / 256) ** 2; GT.push(gg); HT.push(gg ? Math.sqrt(Math.max(0, r / 256 - p1) / p1) : 0);
-  }
-  const gainFor = (thd) => { let i = 1; while (i < HT.length - 1 && HT[i] < thd) i++; return GT[i - 1] + (GT[i] - GT[i - 1]) * clamp01((thd - HT[i - 1]) / (HT[i] - HT[i - 1])); };
-  const geo = new THREE.BufferGeometry(), aPos = attr(geo, 'position', n, 3), aTint = attr(geo, 'tint', n, 1, 0);
-  const mat = new THREE.ShaderMaterial({
-    uniforms: { px: { value: 1 }, zMid: { value: 10 }, colA: { value: new THREE.Color(PTR) }, colB: { value: new THREE.Color(ACC) } },
-    vertexShader: `attribute float tint; uniform float px; varying float vT; varying float vD;
-      void main() { vec4 mv = modelViewMatrix * vec4(position, 1.); gl_Position = projectionMatrix * mv; gl_PointSize = px / -mv.z; vT = tint; vD = -mv.z; }`,
-    fragmentShader: `uniform vec3 colA; uniform vec3 colB; uniform float zMid; varying float vT; varying float vD;
-      void main() { float d = length(gl_PointCoord - .5); float a = smoothstep(.5, .3, d) * mix(.95, .16, smoothstep(zMid - 1.3, zMid + 1.3, vD));
-        if (a < .01) discard; gl_FragColor = vec4(mix(colA, colB, vT), a);
-        #include <colorspace_fragment>
-      }`,
-    transparent: true, depthWrite: false, depthTest: false });
-  const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; spin.add(pts);
-  spin.add(boxEdges(1, { a: EDGE, width: 1, opacity: .9 }).mesh);
-  const view = { fov: 26, dir: [0, 0, 1], half: [1.72, 1.72], target: [0, 0, 0] };
-  function update(dt, t, changed) {
-    spin.rotation.y = reduce ? 0.62 : 0.62 + t * 0.16;
-    mat.uniforms.px.value = 0.021 * stageH * DPR / (2 * Math.tan(view.fov * Math.PI / 360));
-    mat.uniforms.zMid.value = camDist;
-    if (!changed) return;
-    // Two numbers measured from the model's output set the shape: total harmonic distortion sets how square it is,
-    // and the even harmonics set how far it leans to one side.
-    let a1 = 1e-9, odd = 0, even = 0, mean = 0, skew = 0;
-    for (let h = 1; h <= 16; h++) {
-      let a = 0, b = 0;
-      for (let k = 0; k < N; k++) { a += cyc[k] * Math.cos(TAU * h * k / N); b += cyc[k] * Math.sin(TAU * h * k / N); }
-      const p = (a * a + b * b) * 4 / (N * N); if (h === 1) a1 = Math.max(p, 1e-12); else if (h % 2) odd += p; else even += p;
-    }
-    for (let k = 0; k < N; k++) mean += cyc[k] / N;
-    for (let k = 0; k < N; k++) skew += (cyc[k] - mean) ** 3;
-    const g = Math.max(1e-3, gainFor(Math.sqrt((odd + even) / a1))), bias = Math.sign(skew) * Math.min(.4, 1.1 * Math.sqrt(even / a1));
-    const t0 = Math.tanh(g * (-1 - bias)), t1 = Math.tanh(g * (1 - bias));
-    for (let j = 0; j < K; j++) T[j] = 2 * (Math.tanh(g * (sinT[j] - bias)) - t0) / (t1 - t0) - 1;
-    for (let j = 0; j < K; j++) {                   // 0 where the curve is still a straight line, 1 where it has gone flat
-      const j0 = Math.max(0, j - 2), j1 = Math.min(K - 1, j + 2);
-      CL[j] = smooth(.12, .8, 1 - (T[j1] - T[j0]) / (sinT[j1] - sinT[j0]));
-    }
-    const P = aPos.array, C = aTint.array;
-    for (let i = 0; i < n; i++) {
-      let c = 0;
-      for (let k = 0; k < 3; k++) {
-        const x = tix[i * 3 + k], j = Math.min(K - 2, Math.floor(x)), f = x - j;
-        P[i * 3 + k] = T[j] * (1 - f) + T[j + 1] * f;
-        c += CL[j] * (1 - f) + CL[j + 1] * f;
-      }
-      C[i] = Math.min(1, c * .5);
-    }
-    aPos.needsUpdate = aTint.needsUpdate = true;
-  }
-  return { key: 'clip', name: 'Clip', group, view, update,
-    text: 'A sphere that squares off as the circuit distorts. Its squareness follows the model’s measured distortion and its lean follows the even harmonics, so each circuit fills the box its own way.' };
-}
-
-/* ---- B. Sweep: the waveform at every Drive setting ---- */
-function makeSweep() {
-  const group = new THREE.Group(), R = 31, M = 2 * N + 1, W = 3.6, Z = 2.9, H = 0.6, rows = [];
-  for (let r = 0; r < R; r++) { const l = new FatLine(M, { a: INK, width: 1, opacity: .2 }); rows.push(l); group.add(l.mesh); }
-  const hi = new FatLine(M, { a: ACC, width: 2.25, order: 3 }); group.add(hi.mesh);
-  const cg = new THREE.BufferGeometry(), cPos = attr(cg, 'position', M * 2, 3), ci = [];
-  for (let j = 0; j < M - 1; j++) { const a = 2 * j; ci.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
-  cg.setIndex(ci);
-  const curtain = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ color: ACC, transparent: true, opacity: .13, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
-  curtain.frustumCulled = false; curtain.renderOrder = 2; group.add(curtain);
-  const fill = (line, d, z) => { for (let j = 0; j < M; j++) { line.p[j * 3] = (j / (M - 1) - .5) * W; line.p[j * 3 + 1] = sample(d, j / N + .75) * GAIN * H; line.p[j * 3 + 2] = z; } line.commit(); };
-  function update(dt, t, changed, first) {
-    group.rotation.y = -0.46 + (reduce ? 0 : Math.sin(t * 0.22) * 0.09);
-    if (fieldMoving || first) rows.forEach((l, r) => fill(l, r / (R - 1), (.5 - r / (R - 1)) * Z));
-    if (!changed) return;
-    const z = (.5 - driveNow) * Z; fill(hi, driveNow, z);
-    for (let j = 0; j < M; j++) { cPos.array.set([hi.p[j * 3], 0, z, hi.p[j * 3], hi.p[j * 3 + 1], z], j * 6); }
-    cPos.needsUpdate = true;
-    const w = .6 / (R - 1);
-    rows.forEach((l, r) => { l.mat.uniforms.opacity.value = .13 + .4 * (1 - smooth(driveNow - w, driveNow + w, r / (R - 1))); });
-  }
-  return { key: 'sweep', name: 'Sweep', group, update, view: { fov: 24, dir: [0, .52, 1], half: [2.35, 1.5], target: [0, 0, 0] },
-    text: 'Two cycles of the output at every Drive setting, from 0 at the front to 10 at the back. The orange slice is where the knob sits now.' };
-}
-
-/* ---- C. Thread: clean in, coloured out ---- */
-function makeThread() {
-  const group = new THREE.Group(), M = 520, L = 3.7, S = 1.5, CPU = 0.6;
-  const line = new FatLine(M, { a: PTR, b: ACC, width: 2, order: 3 });
-  for (let j = 0; j < M; j++) { const x = -L + 2 * L * j / (M - 1); line.each(line.aTint, j, smooth(-S / 2, S / 2, x)); line.each(line.aFade, j, smooth(0, .9, L - Math.abs(x))); }
-  const tint = new THREE.Mesh(new THREE.BoxGeometry(S, S, S), new THREE.MeshBasicMaterial({ color: ACC, transparent: true, opacity: .1, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
-  tint.renderOrder = 1;
-  group.add(tint, boxEdges(S / 2, { a: INK, width: 1.25, opacity: .75, order: 2 }).mesh, line.mesh);
-  group.rotation.set(0.24, -0.5, 0);
-  function update(dt, t) {
-    const ph0 = reduce ? 0 : t * 0.3;
-    for (let j = 0; j < M; j++) {
-      const x = -L + 2 * L * j / (M - 1), ph = x * CPU - ph0, u = smooth(-S / 2, S / 2, x);
-      const yi = AMP * Math.sin(TAU * ph), yo = sample(driveNow, ph);
-      line.p[j * 3] = x; line.p[j * 3 + 1] = (yi + (yo - yi) * u) * GAIN * .9; line.p[j * 3 + 2] = 0;
-    }
-    line.commit();
-    tint.material.opacity = .015 + .085 * driveNow;
-  }
-  return { key: 'thread', name: 'Thread', group, update, view: { fov: 22, dir: [0, 0, 1], half: [3.75, 1.4], target: [0, 0, 0] },
-    text: 'The signal path as a picture. A clean sine goes in on the left, and the circuit’s real output comes out on the right. The box fills with colour as Drive rises.' };
-}
-
-/* ---- D. Dial: the plugin as an object, one slab and one knob ---- */
-function makeDial() {
-  const group = new THREE.Group(), tilt = new THREE.Group(), rot = new THREE.Group(); group.add(tilt); group.rotation.y = -0.34;
-  const S = 1.75, R = .3, sh = new THREE.Shape();
-  sh.absarc(S - R, S - R, R, 0, Math.PI / 2); sh.absarc(-S + R, S - R, R, Math.PI / 2, Math.PI);
-  sh.absarc(-S + R, -S + R, R, Math.PI, Math.PI * 1.5); sh.absarc(S - R, -S + R, R, Math.PI * 1.5, TAU);
-  const slabG = new THREE.ExtrudeGeometry(sh, { depth: .34, bevelEnabled: true, bevelThickness: .035, bevelSize: .035, bevelSegments: 5, curveSegments: 28 });
-  slabG.rotateX(Math.PI / 2); slabG.translate(0, -.035, 0);
-  const slab = new THREE.Mesh(slabG, new THREE.MeshStandardMaterial({ color: PANEL, roughness: .82 }));
-  const sc = document.createElement('canvas'); sc.width = sc.height = 256;
-  const cx = sc.getContext('2d'), gr = cx.createRadialGradient(128, 128, 56, 128, 128, 128);
-  gr.addColorStop(0, 'rgba(0,0,0,.5)'); gr.addColorStop(.5, 'rgba(0,0,0,.2)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-  cx.fillStyle = gr; cx.fillRect(0, 0, 256, 256);
-  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(2.7, 2.7), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false }));
-  shadow.rotation.x = -Math.PI / 2; shadow.position.set(.1, .002, .12); shadow.renderOrder = 1;
-  const ringMat = new THREE.ShaderMaterial({
-    uniforms: { colA: { value: new THREE.Color(TRACK) }, colB: { value: new THREE.Color(ACC) }, cut: { value: 0 }, aa: { value: .01 } },
-    vertexShader: `varying vec2 vP; void main() { vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
-    fragmentShader: `uniform vec3 colA; uniform vec3 colB; uniform float cut; uniform float aa; varying vec2 vP;
-      void main() { float a = atan(vP.x, vP.y), lim = 2.35619;
-        float inArc = 1. - smoothstep(lim, lim + aa, abs(a)); if (inArc < .01) discard;
-        gl_FragColor = vec4(mix(colA, colB, 1. - smoothstep(cut - aa, cut, a)), inArc);
-        #include <colorspace_fragment>
-      }`,
-    transparent: true, depthWrite: false });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.12, 160, 1), ringMat); ring.rotation.x = -Math.PI / 2; ring.position.y = .004; ring.renderOrder = 2;
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(.79, .83, .36, 128), new THREE.MeshStandardMaterial({ color: CAP, roughness: .45, metalness: .05 })); cap.position.y = .18;
-  const inset = new THREE.Mesh(new THREE.CylinderGeometry(.59, .59, .01, 128), new THREE.MeshStandardMaterial({ color: CAPHI, roughness: .75 })); inset.position.y = .362;
-  const ptr = new THREE.Mesh(new THREE.CapsuleGeometry(.034, .38, 6, 16), new THREE.MeshBasicMaterial({ color: PTR }));
-  ptr.rotation.x = Math.PI / 2; ptr.scale.set(1, 1, .3); ptr.position.set(0, .37, -.5);
-  rot.add(cap, inset, ptr);
-  const TN = 41, ticks = new FatSegs(TN, { a: '#667076', b: PTR, width: 1.5, depthTest: true, order: 3 });
-  for (let i = 0; i < TN; i++) {
-    const a = (-135 + 270 * i / (TN - 1)) * Math.PI / 180, r0 = 1.26, r1 = i % 5 === 0 ? 1.43 : 1.34;
-    ticks.p.set([r0 * Math.sin(a), .004, -r0 * Math.cos(a), r1 * Math.sin(a), .004, -r1 * Math.cos(a)], i * 6);
-  }
-  ticks.commit();
-  const lc = document.createElement('canvas'); lc.width = 1024; lc.height = 128;
-  const ltex = new THREE.CanvasTexture(lc); ltex.colorSpace = THREE.SRGBColorSpace; ltex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  const silk = () => {                             // the wordmark, letter-spaced by hand so it looks the same in every browser
-    const c = lc.getContext('2d'), txt = 'COLOURBOX', gap = 24; c.clearRect(0, 0, 1024, 128);
-    c.font = '600 72px "Barlow Condensed", "Arial Narrow", sans-serif'; c.fillStyle = SOFT; c.textBaseline = 'middle';
-    let w = -gap; for (const ch of txt) w += c.measureText(ch).width + gap;
-    let x = (1024 - w) / 2; for (const ch of txt) { c.fillText(ch, x, 66); x += c.measureText(ch).width + gap; }
-    ltex.needsUpdate = true;
-  };
-  silk(); if (document.fonts && document.fonts.load) document.fonts.load('600 72px "Barlow Condensed"').then(silk, () => {});
-  const mark = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.8 * 128 / 1024), new THREE.MeshBasicMaterial({ map: ltex, transparent: true, depthWrite: false }));
-  mark.rotation.x = -Math.PI / 2; mark.position.set(0, .004, 1.46); mark.renderOrder = 2;
-  tilt.add(slab, shadow, ring, ticks.mesh, mark, rot);
-  let tx = 0, tz = 0;
-  const view = { fov: 24, dir: [0, 1, .66], half: [2.55, 2.3], target: [0, -.16, .1] };
-  function update(dt, t, changed) {
-    const a = (-135 + 270 * driveNow) * Math.PI / 180;
-    rot.rotation.y = -a; ringMat.uniforms.cut.value = a;
-    ringMat.uniforms.aa.value = 2.4 * camDist * Math.tan(view.fov * Math.PI / 360) / (stageH * DPR);
-    if (changed) for (let i = 0; i < TN; i++) ticks.each(ticks.aTint, i, smooth(-.012, .012, driveNow - i / (TN - 1) + .004));
-    const k = 1 - Math.exp(-dt * 5), gx = reduce ? 0 : pointer.y * 0.09, gz = reduce ? 0 : -pointer.x * 0.09;
-    tx += (gx - tx) * k; tz += (gz - tz) * k; tilt.rotation.set(tx, 0, tz);
-  }
-  return { key: 'dial', name: 'Dial', group, view, update,
-    text: 'The plugin as an object: one slab, one knob, lit from the top left. Drag up or down anywhere on the picture to turn it.' };
-}
-
 /* ---- E. Partials: the output taken apart, one ring per harmonic ---- */
 function makePartials() {
   const group = new THREE.Group(), spin = new THREE.Group(); group.add(spin);
@@ -343,22 +157,58 @@ function makePartials() {
       for (let k = 0; k < N; k++) { a += cyc[k] * Math.cos(TAU * h * k / N); b += cyc[k] * Math.sin(TAU * h * k / N); }
       const amp = 2 * Math.hypot(a, b) / N, phi = Math.atan2(a, b); if (h === 1) a1 = Math.max(amp, 1e-9);
       const rel = amp / a1, lvl = h === 1 ? 1 : clamp01((20 * Math.log10(rel + 1e-9) + 66) / 66);   // 0 at 66 dB below the fundamental
-      const disp = h === 1 ? .2 : .2 * Math.sqrt(rel) * smooth(0, .15, lvl), r = .34 + .135 * (h - 1), l = rings[h - 1];
+      const disp = h === 1 ? .2 : .2 * Math.sqrt(rel) * smooth(0, .15, lvl), r = RING0 + RINGSTEP * (h - 1), l = rings[h - 1];
       for (let j = 0; j < M; j++) { const th = TAU * j / M; l.p[j * 3] = r * Math.cos(th); l.p[j * 3 + 1] = disp * Math.sin(h * th + phi); l.p[j * 3 + 2] = r * Math.sin(th); }
       l.commit(); l.mat.uniforms.opacity.value = h === 1 ? .95 : .1 + .9 * Math.pow(lvl, 1.2);
     }
   }
-  return { key: 'partials', name: 'Partials', group, update, view: { fov: 24, dir: [0, .56, 1], half: [2.35, 1.5], target: [0, -.1, 0] },
+  return { key: 'partials', name: 'Partials', group, update, view: { fov: 24, dir: [0, .9, 1], half: [2.3, 1.85], target: [0, -.05, 0] },
     text: 'The output taken apart. Each ring is one harmonic and carries as many ripples as its number, so the cream ring is the note itself. Rings wake up as Drive adds harmonics.' };
+}
+
+/* ---- the Drive knob at the centre of the rings: the Dial study's knob, scaled down ---- */
+const RING0 = 1.02, RINGSTEP = .088, KS = .6;
+function makeKnob() {
+  const group = new THREE.Group(), rot = new THREE.Group(); group.scale.setScalar(KS);
+  const ringMat = new THREE.ShaderMaterial({
+    uniforms: { colA: { value: new THREE.Color(TRACK) }, colB: { value: new THREE.Color(ACC) }, cut: { value: 0 }, aa: { value: .01 } },
+    vertexShader: `varying vec2 vP; void main() { vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
+    fragmentShader: `uniform vec3 colA; uniform vec3 colB; uniform float cut; uniform float aa; varying vec2 vP;
+      void main() { float a = atan(vP.x, vP.y), lim = 2.35619;
+        float inArc = 1. - smoothstep(lim, lim + aa, abs(a)); if (inArc < .01) discard;
+        gl_FragColor = vec4(mix(colA, colB, 1. - smoothstep(cut - aa, cut, a)), inArc);
+        #include <colorspace_fragment>
+      }`,
+    transparent: true, depthWrite: false });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.12, 160, 1), ringMat); ring.rotation.x = -Math.PI / 2; ring.position.y = .004; ring.renderOrder = 2;
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(.79, .83, .36, 96), new THREE.MeshStandardMaterial({ color: CAP, roughness: .45, metalness: .05 })); cap.position.y = .18;
+  const inset = new THREE.Mesh(new THREE.CylinderGeometry(.59, .59, .01, 96), new THREE.MeshStandardMaterial({ color: CAPHI, roughness: .75 })); inset.position.y = .362;
+  const ptr = new THREE.Mesh(new THREE.CapsuleGeometry(.034, .38, 6, 16), new THREE.MeshBasicMaterial({ color: PTR }));
+  ptr.rotation.x = Math.PI / 2; ptr.scale.set(1, 1, .3); ptr.position.set(0, .37, -.5);
+  rot.add(cap, inset, ptr);
+  const TN = 41, ticks = new FatSegs(TN, { a: '#667076', b: PTR, width: 1.25, depthTest: true, order: 3 });
+  for (let i = 0; i < TN; i++) {
+    const a = (-135 + 270 * i / (TN - 1)) * Math.PI / 180, r0 = 1.26, r1 = i % 5 === 0 ? 1.43 : 1.34;
+    ticks.p.set([r0 * Math.sin(a), .004, -r0 * Math.cos(a), r1 * Math.sin(a), .004, -r1 * Math.cos(a)], i * 6);
+  }
+  ticks.commit();
+  group.add(ring, ticks.mesh, rot);
+  function update(changed) {
+    const a = (-135 + 270 * driveNow) * Math.PI / 180;
+    rot.rotation.y = -a; ringMat.uniforms.cut.value = a;
+    ringMat.uniforms.aa.value = 2.4 * camDist * Math.tan(camera.fov * Math.PI / 360) / (stageH * DPR * KS);
+    if (changed) for (let i = 0; i < TN; i++) ticks.each(ticks.aTint, i, smooth(-.012, .012, driveNow - i / (TN - 1) + .004));
+  }
+  return { group, update };
 }
 
 /* ---- stage ---- */
 const pointer = { x: 0, y: 0 };
-const concepts = [makeClip(), makeSweep(), makeThread(), makeDial(), makePartials()];
-concepts.forEach((c) => { c.group.visible = false; scene.add(c.group); });
+const partials = makePartials(), knob = makeKnob();
+scene.add(partials.group, knob.group);
 
 function fit() {
-  const v = concepts[state.concept].view, w = stage.clientWidth || 1, h = stage.clientHeight || 1, tan = Math.tan(v.fov * Math.PI / 360);
+  const v = partials.view, w = stage.clientWidth || 1, h = stage.clientHeight || 1, tan = Math.tan(v.fov * Math.PI / 360);
   camera.fov = v.fov; camera.aspect = w / h;
   camDist = Math.max(v.half[1] / tan, v.half[0] / (tan * camera.aspect));
   const d = new THREE.Vector3(...v.dir).normalize().multiplyScalar(camDist), tg = new THREE.Vector3(...v.target);
@@ -370,7 +220,8 @@ function resize() {
 }
 new ResizeObserver(resize).observe(stage); resize();
 
-let last = performance.now(), time = 0, shown = -1, lastDrive = -1, lastDraw = -1e9;
+// 30 frames a second at most, to keep it light on the CPU
+let last = performance.now(), time = 0, lastDrive = -1, lastDraw = -1e9, first = true;
 function frame(now) {
   requestAnimationFrame(frame);
   if (now - lastDraw < 31) return;
@@ -378,40 +229,35 @@ function frame(now) {
   const dt = Math.min(.05, (now - last) / 1000); last = now; time += dt;
   easeField(dt);
   const dd = state.drive - driveNow; driveNow = Math.abs(dd) < 2e-4 ? state.drive : driveNow + dd * (1 - Math.exp(-dt * 16));
-  const first = shown !== state.concept, changed = first || fieldMoving || driveNow !== lastDrive;
-  if (first) { concepts.forEach((c, i) => { c.group.visible = i === state.concept; }); fit(); }
+  const changed = first || fieldMoving || driveNow !== lastDrive;
   if (changed) for (let k = 0; k < N; k++) cyc[k] = sample(driveNow, k / N);
-  concepts[state.concept].update(dt, time, changed, first);
-  shown = state.concept; lastDrive = driveNow;
+  partials.update(dt, time, changed, first);
+  knob.update(changed);
+  first = false; lastDrive = driveNow;
   renderer.render(scene, camera);
 }
 
-/* ---- plugin link: Drive, Circuit and the picture come in from the plugin; a picture choice goes back ---- */
+/* ---- plugin link: Drive and Circuit come in; dragging the picture turns Drive (260 px for the whole travel, double-click for 0) ---- */
 const backend = window.__JUCE__ && window.__JUCE__.backend;
 const emit = (id, payload) => { try { if (backend) backend.emitEvent(id, payload); } catch (e) {} };
-const tabs = $('tabs');
-concepts.forEach((c, i) => {
-  const b = document.createElement('button'); b.type = 'button'; b.textContent = c.name;
-  b.addEventListener('click', () => { setConcept(i); emit('view', { index: i }); });
-  tabs.append(b);
-});
-function setConcept(i) {
-  state.concept = Math.max(0, Math.min(concepts.length - 1, i | 0));
-  [...tabs.children].forEach((b, j) => b.setAttribute('aria-selected', j === state.concept ? 'true' : 'false'));
-}
+let drag = null;
 function setState(s) {
-  if (s.drive != null) state.drive = clamp01(+s.drive);
+  if (s.drive != null && !drag) state.drive = clamp01(+s.drive);
   if (s.circuit != null) state.model = Math.max(0, Math.min(3, s.circuit | 0));
-  if (s.view != null && (s.view | 0) !== state.concept) setConcept(s.view);
 }
 window.colourbox = setState;
 if (backend) backend.addEventListener('state', setState);
-canvas.addEventListener('pointermove', (e) => {
-  const r = canvas.getBoundingClientRect(); pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1; pointer.y = ((e.clientY - r.top) / r.height) * 2 - 1;
+const turn = (v) => { state.drive = clamp01(v); emit('drive', { value: state.drive }); };
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  drag = { y: e.clientY, d: state.drive }; emit('gesture', { active: true });
+  try { canvas.setPointerCapture(e.pointerId); } catch (x) {}
 });
-canvas.addEventListener('pointerleave', () => { pointer.x = pointer.y = 0; });
+canvas.addEventListener('pointermove', (e) => { if (drag) turn(drag.d + (drag.y - e.clientY) / (e.shiftKey ? 1300 : 260)); });
+const endDrag = () => { if (drag) { drag = null; emit('gesture', { active: false }); } };
+canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('dblclick', () => { emit('gesture', { active: true }); turn(0); emit('gesture', { active: false }); });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
-setConcept(0);
 requestAnimationFrame(frame);
 emit('ready', {});
 })();
