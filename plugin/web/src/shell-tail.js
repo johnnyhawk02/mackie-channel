@@ -1,5 +1,5 @@
 /* ---- the Drive knob at the centre of the rings: the Dial study's knob, scaled down ---- */
-const RING0 = 1.02, RINGSTEP = .088, KS = .6;
+const RING0 = .76, RINGSTEP = .062, KS = .6;
 function makeKnob() {
   const group = new THREE.Group(), rot = new THREE.Group(); group.scale.setScalar(KS);
   const ringMat = new THREE.ShaderMaterial({
@@ -18,18 +18,11 @@ function makeKnob() {
   const ptr = new THREE.Mesh(new THREE.CapsuleGeometry(.034, .38, 6, 16), new THREE.MeshBasicMaterial({ color: PTR }));
   ptr.rotation.x = Math.PI / 2; ptr.scale.set(1, 1, .3); ptr.position.set(0, .37, -.5);
   rot.add(cap, inset, ptr);
-  const TN = 41, ticks = new FatSegs(TN, { a: '#667076', b: PTR, width: 1.25, depthTest: true, order: 3 });
-  for (let i = 0; i < TN; i++) {
-    const a = (-135 + 270 * i / (TN - 1)) * Math.PI / 180, r0 = 1.26, r1 = i % 5 === 0 ? 1.43 : 1.34;
-    ticks.p.set([r0 * Math.sin(a), .004, -r0 * Math.cos(a), r1 * Math.sin(a), .004, -r1 * Math.cos(a)], i * 6);
-  }
-  ticks.commit();
-  group.add(ring, ticks.mesh, rot);
+  group.add(ring, rot); // just the cap and the orange arc: no scale, so the rings sit close
   function update(changed) {
     const a = (-135 + 270 * driveNow) * Math.PI / 180;
     rot.rotation.y = -a; ringMat.uniforms.cut.value = a;
     ringMat.uniforms.aa.value = 2.4 * camDist * Math.tan(camera.fov * Math.PI / 360) / (stageH * DPR * KS);
-    if (changed) for (let i = 0; i < TN; i++) ticks.each(ticks.aTint, i, smooth(-.012, .012, driveNow - i / (TN - 1) + .004));
   }
   return { group, update };
 }

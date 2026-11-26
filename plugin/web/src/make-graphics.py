@@ -21,14 +21,14 @@ partials = sub(partials, "r = .34 + .135 * (h - 1)", "r = RING0 + RINGSTEP * (h 
 # itself, a plain circle), and each ring pulses in brightness and thickness at a rate set by its
 # harmonic number, by as much as that harmonic is present
 partials = sub(partials, "view: { fov: 24, dir: [0, .56, 1], half: [2.35, 1.5], target: [0, -.1, 0] }",
-                         "view: { fov: 24, dir: [0, 1, 0], half: [2.32, 2.32], target: [0, 0, 0] }")
+                         "view: { fov: 24, dir: [0, 1, 0], half: [1.74, 1.74], target: [0, 0, 0] }")
 partials = sub(partials, "const HN = 14, M = 256, rings = [];", "const HN = 14, M = 256, rings = [], lv = new Float32Array(HN + 1), base = new Float32Array(HN + 1);")
 partials = sub(partials, """    spin.rotation.y = reduce ? 0.5 : 0.5 + t * 0.1;
     if (!changed) return;""", """    spin.rotation.y = reduce ? 0.5 : 0.5 + t * 0.1;
     if (!changed) pulse(t);
     if (!changed) return;""")
 partials = sub(partials, "l.p[j * 3] = r * Math.cos(th); l.p[j * 3 + 1] = disp * Math.sin(h * th + phi); l.p[j * 3 + 2] = r * Math.sin(th);",
-                         "const rr = r + (h === 1 ? 0 : .5 * disp * Math.sin(h * th + phi)); l.p[j * 3] = rr * Math.cos(th); l.p[j * 3 + 1] = 0; l.p[j * 3 + 2] = rr * Math.sin(th);")
+                         "const rr = r + (h === 1 ? 0 : .38 * disp * Math.sin(h * th + phi)); l.p[j * 3] = rr * Math.cos(th); l.p[j * 3 + 1] = 0; l.p[j * 3 + 2] = rr * Math.sin(th);")
 partials = sub(partials, "l.commit(); l.mat.uniforms.opacity.value = h === 1 ? .95 : .1 + .9 * Math.pow(lvl, 1.2);\n    }\n  }",
                          "l.commit(); base[h] = h === 1 ? .95 : .1 + .9 * Math.pow(lvl, 1.2); lv[h] = h === 1 ? 0 : lvl;\n    }\n    pulse(t);\n  }\n"
                          "  function pulse(t) {\n"
