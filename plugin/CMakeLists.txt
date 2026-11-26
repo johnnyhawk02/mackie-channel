@@ -6,7 +6,7 @@
 # JUCE is read from ~/Developer/Plugins/JUCE (JUCE 8.0.10); pass -DJUCE_DIR=... for another copy.
 cmake_minimum_required(VERSION 3.22)
 
-project(Colourbox VERSION 1.0.0)
+project(Colourbox VERSION 1.1.0)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "")
@@ -24,7 +24,7 @@ target_include_directories(MackieCore PUBLIC Source)
 set_target_properties(MackieCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 juce_add_plugin(Colourbox
-    VERSION 1.0.0
+    VERSION 1.1.0
     COMPANY_NAME "Johnny"
     BUNDLE_ID "com.johnny.vlzchanneldrive"
     PLUGIN_MANUFACTURER_CODE Jhny
@@ -43,15 +43,21 @@ juce_add_plugin(Colourbox
 
 target_sources(Colourbox PRIVATE Source/PluginProcessor.cpp Source/PluginEditor.cpp)
 
+# The pictures beside the knob: web/graphics.html (built by web/src/make-graphics.py) and three.js,
+# shown in a web view and served from the plugin itself, so they work offline.
+juce_add_binary_data(ColourboxWeb SOURCES web/graphics.html web/three.module.min.js)
+
 target_compile_definitions(Colourbox PUBLIC
-    JUCE_WEB_BROWSER=0
+    JUCE_WEB_BROWSER=1
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
 target_link_libraries(Colourbox
     PRIVATE
         MackieCore
+        ColourboxWeb
         juce::juce_audio_utils
+        juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -69,5 +75,5 @@ target_link_libraries(vst3null PRIVATE juce::juce_audio_processors juce::juce_re
 # Renders the editor to a PNG without a host: snapshot out.png
 juce_add_console_app(snapshot PRODUCT_NAME "snapshot")
 target_sources(snapshot PRIVATE tools/snapshot.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
-target_compile_definitions(snapshot PRIVATE JucePlugin_Name="Colourbox" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
-target_link_libraries(snapshot PRIVATE MackieCore juce::juce_audio_utils juce::juce_recommended_config_flags)
+target_compile_definitions(snapshot PRIVATE JucePlugin_Name="Colourbox" JUCE_WEB_BROWSER=1 JUCE_USE_CURL=0)
+target_link_libraries(snapshot PRIVATE MackieCore ColourboxWeb juce::juce_audio_utils juce::juce_gui_extra juce::juce_recommended_config_flags)

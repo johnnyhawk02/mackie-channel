@@ -1,0 +1,419 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Colourbox graphics</title>
+<style>
+:root {
+  --bg: #15191b; --edge: #3b4347; --ink: #e7e9e4; --ink-soft: #9aa4a7; --accent: #ea6a2c; --pointer: #f1eee4;
+  --cap: #101315; --cap-hi: #2a3134; --panel: #2a3033; --track: #1b2022;
+  --f-display: "Barlow Condensed", "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  color-scheme: dark;
+}
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); -webkit-user-select: none; user-select: none; cursor: default }
+.stage { position: absolute; inset: 0 }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none }
+.fallback { position: absolute; inset: 0; margin: auto; height: max-content; text-align: center; color: var(--ink-soft); font: 13px -apple-system, sans-serif }
+.tabs { position: absolute; left: 12px; top: 6px; display: flex; gap: 14px }
+.tabs button { font: 500 13px/1 var(--f-display); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-soft);
+  background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 0 4px; cursor: pointer }
+.tabs button:hover { color: var(--ink) }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent) }
+</style></head><body>
+<main class="stage" id="stage">
+  <canvas id="gl"></canvas>
+  <p class="fallback" id="fallback" hidden>The pictures need WebGL.</p>
+</main>
+<nav class="tabs" id="tabs"></nav>
+<script type="module">
+import * as THREE from './three.module.min.js';
+(() => {
+'use strict';
+const $ = (id) => document.getElementById(id);
+const stage = $('stage'), canvas = $('gl');
+const fail = () => { canvas.hidden = true; $('fallback').hidden = false; };
+
+const css = getComputedStyle(document.documentElement), tok = (n) => css.getPropertyValue(n).trim();
+const BG = tok('--bg'), INK = tok('--ink'), SOFT = tok('--ink-soft'), EDGE = tok('--edge'), ACC = tok('--accent'), PTR = tok('--pointer'),
+      CAP = tok('--cap'), CAPHI = tok('--cap-hi'), TRACK = tok('--track'), PANEL = tok('--panel');
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const TAU = Math.PI * 2;
+
+/* ---- data: one steady cycle per Drive step (21 steps, 96 samples) for each circuit, from the circuit models ---- */
+const N = 96, D = 21, AMP = 0.25, GAIN = 1.45;
+const B64 = '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';
+const TARGET = (() => {
+  const s = atob(B64), u = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+  const q = new Int16Array(u.buffer), out = [];
+  for (let m = 0; m < 4; m++) { const f = new Float32Array(D * N); for (let i = 0; i < D * N; i++) f[i] = q[m * D * N + i] / 32767; out.push(f); }
+  return out;
+})();
+
+const state = { concept: 0, model: 0, drive: 0.55 };
+const F = Float32Array.from(TARGET[0]);          // the field on screen, eased toward the chosen circuit
+let fieldMoving = true, driveNow = state.drive;
+const cyc = new Float32Array(N);                  // the cycle at the current Drive
+
+function easeField(dt) {
+  const T = TARGET[state.model], k = 1 - Math.exp(-dt * 7); let mx = 0;
+  for (let i = 0; i < F.length; i++) { const d = T[i] - F[i]; F[i] += d * k; if (d > mx) mx = d; else if (-d > mx) mx = -d; }
+  fieldMoving = mx > 2e-4;
+}
+function sample(d01, ph) {                         // d01 = Drive 0..1, ph = phase in cycles
+  const fd = clamp01(d01) * (D - 1), d0 = Math.min(D - 2, Math.floor(fd)), td = fd - d0;
+  const x = (ph - Math.floor(ph)) * N, i0 = Math.floor(x) % N, tx = x - Math.floor(x), i1 = (i0 + 1) % N;
+  const a = F[d0 * N + i0] * (1 - tx) + F[d0 * N + i1] * tx, b = F[(d0 + 1) * N + i0] * (1 - tx) + F[(d0 + 1) * N + i1] * tx;
+  return a * (1 - td) + b * td;
+}
+const wave = (ph) => { const x = (ph - Math.floor(ph)) * N, i0 = Math.floor(x) % N, tx = x - Math.floor(x); return cyc[i0] * (1 - tx) + cyc[(i0 + 1) % N] * tx; };
+
+/* ---- renderer ---- */
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias: true }); } catch (e) { return fail(); }
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+renderer.setPixelRatio(DPR);
+renderer.setClearColor(BG);
+const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(26, 1, 1, 80);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x1c2225, 1.2));
+const key = new THREE.DirectionalLight(0xffffff, 2.3); key.position.set(-2.6, 4.2, 2.4); scene.add(key);
+const RES = { value: new THREE.Vector2(1, 1) };   // half the stage size in CSS px, shared by every line
+let stageH = 1, camDist = 10;
+
+/* ---- lines with a real pixel width (WebGL's own lines are always hairlines) ---- */
+const VS_HEAD = `uniform vec2 res; uniform float width; attribute float side; attribute float tint; attribute float fade;
+varying float vT; varying float vF;
+vec4 widen(vec4 c, vec2 d) { float l = length(d); vec2 n = l > 1e-6 ? vec2(-d.y, d.x) / l : vec2(0., 1.); c.xy += n * side * width * .5 / res * c.w; return c; }`;
+const VS_LINE = `attribute vec3 prev; attribute vec3 next; ${VS_HEAD}
+void main() { mat4 m = projectionMatrix * modelViewMatrix; vec4 c = m * vec4(position, 1.), a = m * vec4(prev, 1.), b = m * vec4(next, 1.);
+  vT = tint; vF = fade; gl_Position = widen(c, (b.xy / b.w - a.xy / a.w) * res); }`;
+const VS_SEG = `attribute vec3 other; ${VS_HEAD}
+void main() { mat4 m = projectionMatrix * modelViewMatrix; vec4 c = m * vec4(position, 1.), o = m * vec4(other, 1.);
+  vT = tint; vF = fade; gl_Position = widen(c, (o.xy / o.w - c.xy / c.w) * res); }`;
+const FS_FLAT = `uniform vec3 colA; uniform vec3 colB; uniform float opacity; varying float vT; varying float vF;
+void main() { gl_FragColor = vec4(mix(colA, colB, vT), opacity * vF);
+  #include <colorspace_fragment>
+}`;
+const fatMat = (o, vs) => new THREE.ShaderMaterial({
+  uniforms: { res: RES, width: { value: o.width || 1.5 }, colA: { value: new THREE.Color(o.a) }, colB: { value: new THREE.Color(o.b || o.a) }, opacity: { value: o.opacity == null ? 1 : o.opacity } },
+  vertexShader: vs, fragmentShader: FS_FLAT, transparent: true, depthWrite: false, depthTest: !!o.depthTest, side: THREE.DoubleSide });
+const attr = (g, name, count, size, fill) => { const a = new THREE.BufferAttribute(new Float32Array(count * size), size); if (fill != null) a.array.fill(fill); g.setAttribute(name, a); return a; };
+
+class FatLine {                                    // a polyline of n points; fill .p then commit()
+  constructor(n, o) {
+    this.n = n; this.closed = !!o.closed; this.p = new Float32Array(n * 3);
+    const g = new THREE.BufferGeometry();
+    this.aPos = attr(g, 'position', n * 2, 3); this.aPrev = attr(g, 'prev', n * 2, 3); this.aNext = attr(g, 'next', n * 2, 3);
+    const side = attr(g, 'side', n * 2, 1); this.aTint = attr(g, 'tint', n * 2, 1, 0); this.aFade = attr(g, 'fade', n * 2, 1, 1);
+    for (let i = 0; i < n; i++) { side.array[2 * i] = -1; side.array[2 * i + 1] = 1; }
+    const idx = [], segs = this.closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) { const a = 2 * i, c = 2 * ((i + 1) % n); idx.push(a, a + 1, c, a + 1, c + 1, c); }
+    g.setIndex(idx);
+    this.mat = fatMat(o, VS_LINE); this.mesh = new THREE.Mesh(g, this.mat); this.mesh.frustumCulled = false; this.mesh.renderOrder = o.order || 0;
+  }
+  commit() {
+    const { n, p, closed } = this, P = this.aPos.array, A = this.aPrev.array, B = this.aNext.array;
+    for (let i = 0; i < n; i++) {
+      const ia = (i > 0 ? i - 1 : closed ? n - 1 : 0) * 3, ib = (i < n - 1 ? i + 1 : closed ? 0 : n - 1) * 3, o = i * 6;
+      for (let k = 0; k < 3; k++) { P[o + k] = P[o + 3 + k] = p[i * 3 + k]; A[o + k] = A[o + 3 + k] = p[ia + k]; B[o + k] = B[o + 3 + k] = p[ib + k]; }
+    }
+    this.aPos.needsUpdate = this.aPrev.needsUpdate = this.aNext.needsUpdate = true;
+  }
+  each(a, i, v) { a.array[2 * i] = a.array[2 * i + 1] = v; a.needsUpdate = true; }
+}
+class FatSegs {                                    // separate segments; fill .p (ax ay az bx by bz per segment) then commit()
+  constructor(count, o) {
+    this.count = count; this.p = new Float32Array(count * 6);
+    const g = new THREE.BufferGeometry();
+    this.aPos = attr(g, 'position', count * 4, 3); this.aOther = attr(g, 'other', count * 4, 3);
+    const side = attr(g, 'side', count * 4, 1); this.aTint = attr(g, 'tint', count * 4, 1, 0); this.aFade = attr(g, 'fade', count * 4, 1, 1);
+    const idx = [];
+    for (let i = 0; i < count; i++) { side.array.set([-1, 1, 1, -1], i * 4); const a = i * 4; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    g.setIndex(idx);
+    this.mat = fatMat(o, VS_SEG); this.mesh = new THREE.Mesh(g, this.mat); this.mesh.frustumCulled = false; this.mesh.renderOrder = o.order || 0;
+  }
+  commit() {
+    const P = this.aPos.array, O = this.aOther.array, p = this.p;
+    for (let i = 0; i < this.count; i++) for (let v = 0; v < 4; v++) for (let k = 0; k < 3; k++) {
+      const a = p[i * 6 + k], b = p[i * 6 + 3 + k], o = (i * 4 + v) * 3 + k;
+      P[o] = v < 2 ? a : b; O[o] = v < 2 ? b : a;
+    }
+    this.aPos.needsUpdate = this.aOther.needsUpdate = true;
+  }
+  each(a, i, v) { a.array.fill(v, i * 4, i * 4 + 4); a.needsUpdate = true; }
+}
+function boxEdges(h, o) {                           // the twelve edges of a cube of half-size h
+  const s = new FatSegs(12, o), c = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+  [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]].forEach(([a, b], i) => { for (let k = 0; k < 3; k++) { s.p[i * 6 + k] = c[a][k] * h; s.p[i * 6 + 3 + k] = c[b][k] * h; } });
+  s.commit(); return s;
+}
+
+/* ---- A. Clip: a sphere pushed through the circuit's transfer curve ---- */
+function makeClip() {
+  const group = new THREE.Group(), spin = new THREE.Group(); group.add(spin); group.rotation.x = 0.36;
+  const n = 11000, K = 129, tix = new Float32Array(n * 3), T = new Float32Array(K), CL = new Float32Array(K), sinT = new Float32Array(K);
+  for (let j = 0; j < K; j++) sinT[j] = Math.sin(-Math.PI / 2 + Math.PI * j / (K - 1));
+  for (let i = 0; i < n; i++) {                     // evenly spread directions (golden-angle spiral)
+    const y = 1 - 2 * (i + .5) / n, r = Math.sqrt(1 - y * y), a = i * Math.PI * (3 - Math.sqrt(5)), u = [Math.cos(a) * r, y, Math.sin(a) * r];
+    for (let k = 0; k < 3; k++) tix[i * 3 + k] = (Math.asin(u[k]) / Math.PI + .5) * (K - 1);
+  }
+  const GT = [], HT = [];                          // distortion of a tanh clipper at each gain, to turn a measured THD back into a gain
+  for (let gg = 0; gg <= 12.01; gg += .25) {
+    let f = 0, r = 0;
+    for (let k = 0; k < 256; k++) { const y = Math.tanh(gg * Math.sin(TAU * (k + .5) / 256)); f += y * Math.sin(TAU * (k + .5) / 256); r += y * y; }
+    const p1 = 2 * (f / 256) ** 2; GT.push(gg); HT.push(gg ? Math.sqrt(Math.max(0, r / 256 - p1) / p1) : 0);
+  }
+  const gainFor = (thd) => { let i = 1; while (i < HT.length - 1 && HT[i] < thd) i++; return GT[i - 1] + (GT[i] - GT[i - 1]) * clamp01((thd - HT[i - 1]) / (HT[i] - HT[i - 1])); };
+  const geo = new THREE.BufferGeometry(), aPos = attr(geo, 'position', n, 3), aTint = attr(geo, 'tint', n, 1, 0);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { px: { value: 1 }, zMid: { value: 10 }, colA: { value: new THREE.Color(PTR) }, colB: { value: new THREE.Color(ACC) } },
+    vertexShader: `attribute float tint; uniform float px; varying float vT; varying float vD;
+      void main() { vec4 mv = modelViewMatrix * vec4(position, 1.); gl_Position = projectionMatrix * mv; gl_PointSize = px / -mv.z; vT = tint; vD = -mv.z; }`,
+    fragmentShader: `uniform vec3 colA; uniform vec3 colB; uniform float zMid; varying float vT; varying float vD;
+      void main() { float d = length(gl_PointCoord - .5); float a = smoothstep(.5, .3, d) * mix(.95, .16, smoothstep(zMid - 1.3, zMid + 1.3, vD));
+        if (a < .01) discard; gl_FragColor = vec4(mix(colA, colB, vT), a);
+        #include <colorspace_fragment>
+      }`,
+    transparent: true, depthWrite: false, depthTest: false });
+  const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; spin.add(pts);
+  spin.add(boxEdges(1, { a: EDGE, width: 1, opacity: .9 }).mesh);
+  const view = { fov: 26, dir: [0, 0, 1], half: [1.72, 1.72], target: [0, 0, 0] };
+  function update(dt, t, changed) {
+    spin.rotation.y = reduce ? 0.62 : 0.62 + t * 0.16;
+    mat.uniforms.px.value = 0.021 * stageH * DPR / (2 * Math.tan(view.fov * Math.PI / 360));
+    mat.uniforms.zMid.value = camDist;
+    if (!changed) return;
+    // Two numbers measured from the model's output set the shape: total harmonic distortion sets how square it is,
+    // and the even harmonics set how far it leans to one side.
+    let a1 = 1e-9, odd = 0, even = 0, mean = 0, skew = 0;
+    for (let h = 1; h <= 16; h++) {
+      let a = 0, b = 0;
+      for (let k = 0; k < N; k++) { a += cyc[k] * Math.cos(TAU * h * k / N); b += cyc[k] * Math.sin(TAU * h * k / N); }
+      const p = (a * a + b * b) * 4 / (N * N); if (h === 1) a1 = Math.max(p, 1e-12); else if (h % 2) odd += p; else even += p;
+    }
+    for (let k = 0; k < N; k++) mean += cyc[k] / N;
+    for (let k = 0; k < N; k++) skew += (cyc[k] - mean) ** 3;
+    const g = Math.max(1e-3, gainFor(Math.sqrt((odd + even) / a1))), bias = Math.sign(skew) * Math.min(.4, 1.1 * Math.sqrt(even / a1));
+    const t0 = Math.tanh(g * (-1 - bias)), t1 = Math.tanh(g * (1 - bias));
+    for (let j = 0; j < K; j++) T[j] = 2 * (Math.tanh(g * (sinT[j] - bias)) - t0) / (t1 - t0) - 1;
+    for (let j = 0; j < K; j++) {                   // 0 where the curve is still a straight line, 1 where it has gone flat
+      const j0 = Math.max(0, j - 2), j1 = Math.min(K - 1, j + 2);
+      CL[j] = smooth(.12, .8, 1 - (T[j1] - T[j0]) / (sinT[j1] - sinT[j0]));
+    }
+    const P = aPos.array, C = aTint.array;
+    for (let i = 0; i < n; i++) {
+      let c = 0;
+      for (let k = 0; k < 3; k++) {
+        const x = tix[i * 3 + k], j = Math.min(K - 2, Math.floor(x)), f = x - j;
+        P[i * 3 + k] = T[j] * (1 - f) + T[j + 1] * f;
+        c += CL[j] * (1 - f) + CL[j + 1] * f;
+      }
+      C[i] = Math.min(1, c * .5);
+    }
+    aPos.needsUpdate = aTint.needsUpdate = true;
+  }
+  return { key: 'clip', name: 'Clip', group, view, update,
+    text: 'A sphere that squares off as the circuit distorts. Its squareness follows the model’s measured distortion and its lean follows the even harmonics, so each circuit fills the box its own way.' };
+}
+
+/* ---- B. Sweep: the waveform at every Drive setting ---- */
+function makeSweep() {
+  const group = new THREE.Group(), R = 31, M = 2 * N + 1, W = 3.6, Z = 2.9, H = 0.6, rows = [];
+  for (let r = 0; r < R; r++) { const l = new FatLine(M, { a: INK, width: 1, opacity: .2 }); rows.push(l); group.add(l.mesh); }
+  const hi = new FatLine(M, { a: ACC, width: 2.25, order: 3 }); group.add(hi.mesh);
+  const cg = new THREE.BufferGeometry(), cPos = attr(cg, 'position', M * 2, 3), ci = [];
+  for (let j = 0; j < M - 1; j++) { const a = 2 * j; ci.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  cg.setIndex(ci);
+  const curtain = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ color: ACC, transparent: true, opacity: .13, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
+  curtain.frustumCulled = false; curtain.renderOrder = 2; group.add(curtain);
+  const fill = (line, d, z) => { for (let j = 0; j < M; j++) { line.p[j * 3] = (j / (M - 1) - .5) * W; line.p[j * 3 + 1] = sample(d, j / N + .75) * GAIN * H; line.p[j * 3 + 2] = z; } line.commit(); };
+  function update(dt, t, changed, first) {
+    group.rotation.y = -0.46 + (reduce ? 0 : Math.sin(t * 0.22) * 0.09);
+    if (fieldMoving || first) rows.forEach((l, r) => fill(l, r / (R - 1), (.5 - r / (R - 1)) * Z));
+    if (!changed) return;
+    const z = (.5 - driveNow) * Z; fill(hi, driveNow, z);
+    for (let j = 0; j < M; j++) { cPos.array.set([hi.p[j * 3], 0, z, hi.p[j * 3], hi.p[j * 3 + 1], z], j * 6); }
+    cPos.needsUpdate = true;
+    const w = .6 / (R - 1);
+    rows.forEach((l, r) => { l.mat.uniforms.opacity.value = .13 + .4 * (1 - smooth(driveNow - w, driveNow + w, r / (R - 1))); });
+  }
+  return { key: 'sweep', name: 'Sweep', group, update, view: { fov: 24, dir: [0, .52, 1], half: [2.35, 1.5], target: [0, 0, 0] },
+    text: 'Two cycles of the output at every Drive setting, from 0 at the front to 10 at the back. The orange slice is where the knob sits now.' };
+}
+
+/* ---- C. Thread: clean in, coloured out ---- */
+function makeThread() {
+  const group = new THREE.Group(), M = 520, L = 3.7, S = 1.5, CPU = 0.6;
+  const line = new FatLine(M, { a: PTR, b: ACC, width: 2, order: 3 });
+  for (let j = 0; j < M; j++) { const x = -L + 2 * L * j / (M - 1); line.each(line.aTint, j, smooth(-S / 2, S / 2, x)); line.each(line.aFade, j, smooth(0, .9, L - Math.abs(x))); }
+  const tint = new THREE.Mesh(new THREE.BoxGeometry(S, S, S), new THREE.MeshBasicMaterial({ color: ACC, transparent: true, opacity: .1, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
+  tint.renderOrder = 1;
+  group.add(tint, boxEdges(S / 2, { a: INK, width: 1.25, opacity: .75, order: 2 }).mesh, line.mesh);
+  group.rotation.set(0.24, -0.5, 0);
+  function update(dt, t) {
+    const ph0 = reduce ? 0 : t * 0.3;
+    for (let j = 0; j < M; j++) {
+      const x = -L + 2 * L * j / (M - 1), ph = x * CPU - ph0, u = smooth(-S / 2, S / 2, x);
+      const yi = AMP * Math.sin(TAU * ph), yo = sample(driveNow, ph);
+      line.p[j * 3] = x; line.p[j * 3 + 1] = (yi + (yo - yi) * u) * GAIN * .9; line.p[j * 3 + 2] = 0;
+    }
+    line.commit();
+    tint.material.opacity = .015 + .085 * driveNow;
+  }
+  return { key: 'thread', name: 'Thread', group, update, view: { fov: 22, dir: [0, 0, 1], half: [3.75, 1.4], target: [0, 0, 0] },
+    text: 'The signal path as a picture. A clean sine goes in on the left, and the circuit’s real output comes out on the right. The box fills with colour as Drive rises.' };
+}
+
+/* ---- D. Dial: the plugin as an object, one slab and one knob ---- */
+function makeDial() {
+  const group = new THREE.Group(), tilt = new THREE.Group(), rot = new THREE.Group(); group.add(tilt); group.rotation.y = -0.34;
+  const S = 1.75, R = .3, sh = new THREE.Shape();
+  sh.absarc(S - R, S - R, R, 0, Math.PI / 2); sh.absarc(-S + R, S - R, R, Math.PI / 2, Math.PI);
+  sh.absarc(-S + R, -S + R, R, Math.PI, Math.PI * 1.5); sh.absarc(S - R, -S + R, R, Math.PI * 1.5, TAU);
+  const slabG = new THREE.ExtrudeGeometry(sh, { depth: .34, bevelEnabled: true, bevelThickness: .035, bevelSize: .035, bevelSegments: 5, curveSegments: 28 });
+  slabG.rotateX(Math.PI / 2); slabG.translate(0, -.035, 0);
+  const slab = new THREE.Mesh(slabG, new THREE.MeshStandardMaterial({ color: PANEL, roughness: .82 }));
+  const sc = document.createElement('canvas'); sc.width = sc.height = 256;
+  const cx = sc.getContext('2d'), gr = cx.createRadialGradient(128, 128, 56, 128, 128, 128);
+  gr.addColorStop(0, 'rgba(0,0,0,.5)'); gr.addColorStop(.5, 'rgba(0,0,0,.2)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  cx.fillStyle = gr; cx.fillRect(0, 0, 256, 256);
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(2.7, 2.7), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false }));
+  shadow.rotation.x = -Math.PI / 2; shadow.position.set(.1, .002, .12); shadow.renderOrder = 1;
+  const ringMat = new THREE.ShaderMaterial({
+    uniforms: { colA: { value: new THREE.Color(TRACK) }, colB: { value: new THREE.Color(ACC) }, cut: { value: 0 }, aa: { value: .01 } },
+    vertexShader: `varying vec2 vP; void main() { vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
+    fragmentShader: `uniform vec3 colA; uniform vec3 colB; uniform float cut; uniform float aa; varying vec2 vP;
+      void main() { float a = atan(vP.x, vP.y), lim = 2.35619;
+        float inArc = 1. - smoothstep(lim, lim + aa, abs(a)); if (inArc < .01) discard;
+        gl_FragColor = vec4(mix(colA, colB, 1. - smoothstep(cut - aa, cut, a)), inArc);
+        #include <colorspace_fragment>
+      }`,
+    transparent: true, depthWrite: false });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.12, 160, 1), ringMat); ring.rotation.x = -Math.PI / 2; ring.position.y = .004; ring.renderOrder = 2;
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(.79, .83, .36, 128), new THREE.MeshStandardMaterial({ color: CAP, roughness: .45, metalness: .05 })); cap.position.y = .18;
+  const inset = new THREE.Mesh(new THREE.CylinderGeometry(.59, .59, .01, 128), new THREE.MeshStandardMaterial({ color: CAPHI, roughness: .75 })); inset.position.y = .362;
+  const ptr = new THREE.Mesh(new THREE.CapsuleGeometry(.034, .38, 6, 16), new THREE.MeshBasicMaterial({ color: PTR }));
+  ptr.rotation.x = Math.PI / 2; ptr.scale.set(1, 1, .3); ptr.position.set(0, .37, -.5);
+  rot.add(cap, inset, ptr);
+  const TN = 41, ticks = new FatSegs(TN, { a: '#667076', b: PTR, width: 1.5, depthTest: true, order: 3 });
+  for (let i = 0; i < TN; i++) {
+    const a = (-135 + 270 * i / (TN - 1)) * Math.PI / 180, r0 = 1.26, r1 = i % 5 === 0 ? 1.43 : 1.34;
+    ticks.p.set([r0 * Math.sin(a), .004, -r0 * Math.cos(a), r1 * Math.sin(a), .004, -r1 * Math.cos(a)], i * 6);
+  }
+  ticks.commit();
+  const lc = document.createElement('canvas'); lc.width = 1024; lc.height = 128;
+  const ltex = new THREE.CanvasTexture(lc); ltex.colorSpace = THREE.SRGBColorSpace; ltex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const silk = () => {                             // the wordmark, letter-spaced by hand so it looks the same in every browser
+    const c = lc.getContext('2d'), txt = 'COLOURBOX', gap = 24; c.clearRect(0, 0, 1024, 128);
+    c.font = '600 72px "Barlow Condensed", "Arial Narrow", sans-serif'; c.fillStyle = SOFT; c.textBaseline = 'middle';
+    let w = -gap; for (const ch of txt) w += c.measureText(ch).width + gap;
+    let x = (1024 - w) / 2; for (const ch of txt) { c.fillText(ch, x, 66); x += c.measureText(ch).width + gap; }
+    ltex.needsUpdate = true;
+  };
+  silk(); if (document.fonts && document.fonts.load) document.fonts.load('600 72px "Barlow Condensed"').then(silk, () => {});
+  const mark = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.8 * 128 / 1024), new THREE.MeshBasicMaterial({ map: ltex, transparent: true, depthWrite: false }));
+  mark.rotation.x = -Math.PI / 2; mark.position.set(0, .004, 1.46); mark.renderOrder = 2;
+  tilt.add(slab, shadow, ring, ticks.mesh, mark, rot);
+  let tx = 0, tz = 0;
+  const view = { fov: 24, dir: [0, 1, .66], half: [2.55, 2.3], target: [0, -.16, .1] };
+  function update(dt, t, changed) {
+    const a = (-135 + 270 * driveNow) * Math.PI / 180;
+    rot.rotation.y = -a; ringMat.uniforms.cut.value = a;
+    ringMat.uniforms.aa.value = 2.4 * camDist * Math.tan(view.fov * Math.PI / 360) / (stageH * DPR);
+    if (changed) for (let i = 0; i < TN; i++) ticks.each(ticks.aTint, i, smooth(-.012, .012, driveNow - i / (TN - 1) + .004));
+    const k = 1 - Math.exp(-dt * 5), gx = reduce ? 0 : pointer.y * 0.09, gz = reduce ? 0 : -pointer.x * 0.09;
+    tx += (gx - tx) * k; tz += (gz - tz) * k; tilt.rotation.set(tx, 0, tz);
+  }
+  return { key: 'dial', name: 'Dial', group, view, update,
+    text: 'The plugin as an object: one slab, one knob, lit from the top left. Drag up or down anywhere on the picture to turn it.' };
+}
+
+/* ---- E. Partials: the output taken apart, one ring per harmonic ---- */
+function makePartials() {
+  const group = new THREE.Group(), spin = new THREE.Group(); group.add(spin);
+  const HN = 14, M = 256, rings = [];
+  for (let h = 1; h <= HN; h++) { const l = new FatLine(M, { a: h === 1 ? PTR : ACC, width: h === 1 ? 2 : 1.6, closed: true, order: h === 1 ? 2 : 1 }); rings.push(l); spin.add(l.mesh); }
+  function update(dt, t, changed) {
+    spin.rotation.y = reduce ? 0.5 : 0.5 + t * 0.1;
+    if (!changed) return;
+    let a1 = 1e-9;
+    for (let h = 1; h <= HN; h++) {
+      let a = 0, b = 0;
+      for (let k = 0; k < N; k++) { a += cyc[k] * Math.cos(TAU * h * k / N); b += cyc[k] * Math.sin(TAU * h * k / N); }
+      const amp = 2 * Math.hypot(a, b) / N, phi = Math.atan2(a, b); if (h === 1) a1 = Math.max(amp, 1e-9);
+      const rel = amp / a1, lvl = h === 1 ? 1 : clamp01((20 * Math.log10(rel + 1e-9) + 66) / 66);   // 0 at 66 dB below the fundamental
+      const disp = h === 1 ? .2 : .2 * Math.sqrt(rel) * smooth(0, .15, lvl), r = .34 + .135 * (h - 1), l = rings[h - 1];
+      for (let j = 0; j < M; j++) { const th = TAU * j / M; l.p[j * 3] = r * Math.cos(th); l.p[j * 3 + 1] = disp * Math.sin(h * th + phi); l.p[j * 3 + 2] = r * Math.sin(th); }
+      l.commit(); l.mat.uniforms.opacity.value = h === 1 ? .95 : .1 + .9 * Math.pow(lvl, 1.2);
+    }
+  }
+  return { key: 'partials', name: 'Partials', group, update, view: { fov: 24, dir: [0, .56, 1], half: [2.35, 1.5], target: [0, -.1, 0] },
+    text: 'The output taken apart. Each ring is one harmonic and carries as many ripples as its number, so the cream ring is the note itself. Rings wake up as Drive adds harmonics.' };
+}
+
+/* ---- stage ---- */
+const pointer = { x: 0, y: 0 };
+const concepts = [makeClip(), makeSweep(), makeThread(), makeDial(), makePartials()];
+concepts.forEach((c) => { c.group.visible = false; scene.add(c.group); });
+
+function fit() {
+  const v = concepts[state.concept].view, w = stage.clientWidth || 1, h = stage.clientHeight || 1, tan = Math.tan(v.fov * Math.PI / 360);
+  camera.fov = v.fov; camera.aspect = w / h;
+  camDist = Math.max(v.half[1] / tan, v.half[0] / (tan * camera.aspect));
+  const d = new THREE.Vector3(...v.dir).normalize().multiplyScalar(camDist), tg = new THREE.Vector3(...v.target);
+  camera.position.copy(tg).add(d); camera.lookAt(tg); camera.updateProjectionMatrix();
+}
+function resize() {
+  const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+  renderer.setSize(w, h, false); RES.value.set(w / 2, h / 2); stageH = h; fit();
+}
+new ResizeObserver(resize).observe(stage); resize();
+
+let last = performance.now(), time = 0, shown = -1, lastDrive = -1, lastDraw = -1e9;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (now - lastDraw < 31) return;
+  lastDraw = now;
+  const dt = Math.min(.05, (now - last) / 1000); last = now; time += dt;
+  easeField(dt);
+  const dd = state.drive - driveNow; driveNow = Math.abs(dd) < 2e-4 ? state.drive : driveNow + dd * (1 - Math.exp(-dt * 16));
+  const first = shown !== state.concept, changed = first || fieldMoving || driveNow !== lastDrive;
+  if (first) { concepts.forEach((c, i) => { c.group.visible = i === state.concept; }); fit(); }
+  if (changed) for (let k = 0; k < N; k++) cyc[k] = sample(driveNow, k / N);
+  concepts[state.concept].update(dt, time, changed, first);
+  shown = state.concept; lastDrive = driveNow;
+  renderer.render(scene, camera);
+}
+
+/* ---- plugin link: Drive, Circuit and the picture come in from the plugin; a picture choice goes back ---- */
+const backend = window.__JUCE__ && window.__JUCE__.backend;
+const emit = (id, payload) => { try { if (backend) backend.emitEvent(id, payload); } catch (e) {} };
+const tabs = $('tabs');
+concepts.forEach((c, i) => {
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = c.name;
+  b.addEventListener('click', () => { setConcept(i); emit('view', { index: i }); });
+  tabs.append(b);
+});
+function setConcept(i) {
+  state.concept = Math.max(0, Math.min(concepts.length - 1, i | 0));
+  [...tabs.children].forEach((b, j) => b.setAttribute('aria-selected', j === state.concept ? 'true' : 'false'));
+}
+function setState(s) {
+  if (s.drive != null) state.drive = clamp01(+s.drive);
+  if (s.circuit != null) state.model = Math.max(0, Math.min(3, s.circuit | 0));
+  if (s.view != null && (s.view | 0) !== state.concept) setConcept(s.view);
+}
+window.colourbox = setState;
+if (backend) backend.addEventListener('state', setState);
+canvas.addEventListener('pointermove', (e) => {
+  const r = canvas.getBoundingClientRect(); pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1; pointer.y = ((e.clientY - r.top) / r.height) * 2 - 1;
+});
+canvas.addEventListener('pointerleave', () => { pointer.x = pointer.y = 0; });
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+setConcept(0);
+requestAnimationFrame(frame);
+emit('ready', {});
+})();
+</script>
+</body></html>

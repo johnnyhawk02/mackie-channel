@@ -1,6 +1,8 @@
 #include "PluginEditor.h"
+#include "BinaryData.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace
 {
@@ -11,6 +13,7 @@ namespace
     constexpr float a0 = -135.0f, a1 = 135.0f; // knob travel in degrees, as on the page
     constexpr int size = 236;                  // the page's knob area, in its own units
     constexpr int row = 30;                    // the Quality row under the knob, and the Circuit row over it
+    constexpr int screenWidth = 404;           // the pictures, left of the knob, as tall as the editor
 
     void styleRowButton (juce::TextButton& b)
     {
@@ -63,8 +66,26 @@ void DriveKnobLook::drawRotarySlider (juce::Graphics& g, int x, int y, int width
 }
 
 ColourboxEditor::ColourboxEditor (ColourboxProcessor& p)
-    : AudioProcessorEditor (&p)
+    : AudioProcessorEditor (&p),
+      screen (juce::WebBrowserComponent::Options{}
+                  .withNativeIntegrationEnabled()
+                  .withResourceProvider ([this] (const juce::String& url) { return serve (url); })
+                  .withEventListener ("ready", [this] (const juce::var&)
+                  {
+                      screenReady = true;
+                      sentDrive = -1.0f; // send everything again
+                      // for tests: the page only says ready once WebGL is up and all five pictures are built
+                      if (auto* f = std::getenv ("COLOURBOX_READY_FILE")) juce::File (f).replaceWithText ("ready");
+                  })
+                  .withEventListener ("view", [&p] (const juce::var& v)
+                  {
+                      // which picture is not a parameter: it is kept with the plugin's state, like a window size
+                      p.apvts.state.setProperty ("view", juce::jlimit (0, 4, (int) v.getProperty ("index", 0)), nullptr);
+                  }))
 {
+    addAndMakeVisible (screen);
+    screen.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
+
     knob.setLookAndFeel (&look);
     knob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     knob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -102,7 +123,39 @@ ColourboxEditor::ColourboxEditor (ColourboxProcessor& p)
         addAndMakeVisible (b);
     }
     circuitAttachment->sendInitialUpdate();
-    setSize (size, size + 2 * row);
+    setSize (screenWidth + size, size + 2 * row);
+    startTimerHz (30);
+}
+
+std::optional<juce::WebBrowserComponent::Resource> ColourboxEditor::serve (const juce::String& url)
+{
+    auto make = [] (const char* data, int bytes, const char* mime)
+    {
+        std::vector<std::byte> v ((size_t) bytes);
+        std::memcpy (v.data(), data, (size_t) bytes);
+        return juce::WebBrowserComponent::Resource { std::move (v), mime };
+    };
+    if (url == "/" || url == "/graphics.html")
+        return make (BinaryData::graphics_html, BinaryData::graphics_htmlSize, "text/html");
+    if (url == "/three.module.min.js")
+        return make (BinaryData::three_module_min_js, BinaryData::three_module_min_jsSize, "text/javascript");
+    return std::nullopt;
+}
+
+void ColourboxEditor::timerCallback()
+{
+    if (! screenReady) return;
+    auto& apvts = static_cast<ColourboxProcessor&> (processor).apvts;
+    const float drive = apvts.getRawParameterValue ("drive")->load();
+    const int circuitIndex = (int) apvts.getRawParameterValue ("circuit")->load();
+    const int view = (int) apvts.state.getProperty ("view", 0);
+    if (drive == sentDrive && circuitIndex == sentCircuit && view == sentView) return;
+    sentDrive = drive; sentCircuit = circuitIndex; sentView = view;
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("drive", drive);
+    o->setProperty ("circuit", circuitIndex);
+    o->setProperty ("view", view);
+    screen.emitEventIfBrowserIsVisible ("state", juce::var (o));
 }
 
 void ColourboxEditor::showCircuit (int index)
@@ -119,6 +172,7 @@ void ColourboxEditor::showQuality (int index)
 
 ColourboxEditor::~ColourboxEditor()
 {
+    stopTimer();
     knob.setLookAndFeel (nullptr);
 }
 
@@ -130,6 +184,7 @@ void ColourboxEditor::paint (juce::Graphics& g)
 void ColourboxEditor::resized()
 {
     auto r = getLocalBounds();
+    screen.setBounds (r.removeFromLeft (screenWidth));
     {
         auto top = r.removeFromTop (row).withSizeKeepingCentre (size - 24, row - 8).translated (0, 4);
         const int w = top.getWidth() / 4;
