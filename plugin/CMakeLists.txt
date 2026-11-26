@@ -6,7 +6,7 @@
 # JUCE is read from ~/Developer/Plugins/JUCE (JUCE 8.0.10); pass -DJUCE_DIR=... for another copy.
 cmake_minimum_required(VERSION 3.22)
 
-project(Colourbox VERSION 1.4.0)
+project(Colourbox VERSION 1.5.0)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "")
@@ -24,7 +24,7 @@ target_include_directories(MackieCore PUBLIC Source)
 set_target_properties(MackieCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 juce_add_plugin(Colourbox
-    VERSION 1.4.0
+    VERSION 1.5.0
     COMPANY_NAME "Johnny"
     BUNDLE_ID "com.johnny.vlzchanneldrive"
     PLUGIN_MANUFACTURER_CODE Jhny

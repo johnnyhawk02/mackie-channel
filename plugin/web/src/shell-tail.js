@@ -1,5 +1,5 @@
 /* ---- the Drive knob at the centre of the rings: the Dial study's knob, scaled down ---- */
-const RING0 = .76, RINGSTEP = .062, KS = .6;
+const RING0 = .74, RINGSTEP = .031, KS = .6;
 function makeKnob() {
   const group = new THREE.Group(), rot = new THREE.Group(); group.scale.setScalar(KS);
   const ringMat = new THREE.ShaderMaterial({

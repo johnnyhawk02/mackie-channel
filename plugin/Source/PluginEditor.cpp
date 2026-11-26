@@ -9,8 +9,8 @@ namespace
     // the web page's dark theme
     const juce::Colour bench (0xff15191b), inkSoft (0xff9aa4a7), accent (0xffea6a2c);
 
-    constexpr int width = 300, screenHeight = 300; // the picture with the knob at its centre
-    constexpr int row = 30;                        // the Circuit row over it and the Quality row under it
+    constexpr int width = 210, screenHeight = 210; // the picture with the knob at its centre
+    constexpr int row = 24;                        // the Circuit row over it and the Quality row under it
 
     void styleRowButton (juce::TextButton& b)
     {
@@ -139,7 +139,7 @@ void ColourboxEditor::resized()
     auto r = getLocalBounds();
     auto layRow = [] (juce::Rectangle<int> area, juce::TextButton* buttons)
     {
-        area = area.withSizeKeepingCentre (280, row - 8);
+        area = area.withSizeKeepingCentre (width - 6, row - 8);
         const int w = area.getWidth() / 4;
         for (int i = 0; i < 4; i++) buttons[i].setBounds (area.removeFromLeft (w));
     };
