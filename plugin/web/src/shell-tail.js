@@ -44,6 +44,7 @@ function fit() {
   camera.fov = v.fov; camera.aspect = w / h;
   camDist = Math.max(v.half[1] / tan, v.half[0] / (tan * camera.aspect));
   const d = new THREE.Vector3(...v.dir).normalize().multiplyScalar(camDist), tg = new THREE.Vector3(...v.target);
+  camera.up.set(0, 0, -1); // straight down, with the knob's 0 to 10 arc the right way up
   camera.position.copy(tg).add(d); camera.lookAt(tg); camera.updateProjectionMatrix();
 }
 function resize() {

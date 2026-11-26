@@ -146,10 +146,11 @@ function boxEdges(h, o) {                           // the twelve edges of a cub
 /* ---- E. Partials: the output taken apart, one ring per harmonic ---- */
 function makePartials() {
   const group = new THREE.Group(), spin = new THREE.Group(); group.add(spin);
-  const HN = 14, M = 256, rings = [];
+  const HN = 14, M = 256, rings = [], lv = new Float32Array(HN + 1), base = new Float32Array(HN + 1);
   for (let h = 1; h <= HN; h++) { const l = new FatLine(M, { a: h === 1 ? PTR : ACC, width: h === 1 ? 2 : 1.6, closed: true, order: h === 1 ? 2 : 1 }); rings.push(l); spin.add(l.mesh); }
   function update(dt, t, changed) {
     spin.rotation.y = reduce ? 0.5 : 0.5 + t * 0.1;
+    if (!changed) pulse(t);
     if (!changed) return;
     let a1 = 1e-9;
     for (let h = 1; h <= HN; h++) {
@@ -158,11 +159,19 @@ function makePartials() {
       const amp = 2 * Math.hypot(a, b) / N, phi = Math.atan2(a, b); if (h === 1) a1 = Math.max(amp, 1e-9);
       const rel = amp / a1, lvl = h === 1 ? 1 : clamp01((20 * Math.log10(rel + 1e-9) + 66) / 66);   // 0 at 66 dB below the fundamental
       const disp = h === 1 ? .2 : .2 * Math.sqrt(rel) * smooth(0, .15, lvl), r = RING0 + RINGSTEP * (h - 1), l = rings[h - 1];
-      for (let j = 0; j < M; j++) { const th = TAU * j / M; l.p[j * 3] = r * Math.cos(th); l.p[j * 3 + 1] = disp * Math.sin(h * th + phi); l.p[j * 3 + 2] = r * Math.sin(th); }
-      l.commit(); l.mat.uniforms.opacity.value = h === 1 ? .95 : .1 + .9 * Math.pow(lvl, 1.2);
+      for (let j = 0; j < M; j++) { const th = TAU * j / M; const rr = r + (h === 1 ? 0 : .5 * disp * Math.sin(h * th + phi)); l.p[j * 3] = rr * Math.cos(th); l.p[j * 3 + 1] = 0; l.p[j * 3 + 2] = rr * Math.sin(th); }
+      l.commit(); base[h] = h === 1 ? .95 : .1 + .9 * Math.pow(lvl, 1.2); lv[h] = h === 1 ? 0 : lvl;
+    }
+    pulse(t);
+  }
+  function pulse(t) {
+    for (let h = 1; h <= HN; h++) {
+      const u = rings[h - 1].mat.uniforms, w = reduce ? .5 : .5 + .5 * Math.sin(t * (.9 + .45 * h) + h * 1.7), k = lv[h] * lv[h];
+      u.opacity.value = base[h] * (1 - .45 * k * (1 - w));
+      u.width.value = (h === 1 ? 2 : 1.6) * (1 + 1.1 * k * w);
     }
   }
-  return { key: 'partials', name: 'Partials', group, update, view: { fov: 24, dir: [0, .9, 1], half: [2.3, 1.85], target: [0, -.05, 0] },
+  return { key: 'partials', name: 'Partials', group, update, view: { fov: 24, dir: [0, 1, 0], half: [2.32, 2.32], target: [0, 0, 0] },
     text: 'The output taken apart. Each ring is one harmonic and carries as many ripples as its number, so the cream ring is the note itself. Rings wake up as Drive adds harmonics.' };
 }
 
@@ -212,6 +221,7 @@ function fit() {
   camera.fov = v.fov; camera.aspect = w / h;
   camDist = Math.max(v.half[1] / tan, v.half[0] / (tan * camera.aspect));
   const d = new THREE.Vector3(...v.dir).normalize().multiplyScalar(camDist), tg = new THREE.Vector3(...v.target);
+  camera.up.set(0, 0, -1); // straight down, with the knob's 0 to 10 arc the right way up
   camera.position.copy(tg).add(d); camera.lookAt(tg); camera.updateProjectionMatrix();
 }
 function resize() {

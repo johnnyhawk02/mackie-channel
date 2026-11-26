@@ -9,7 +9,7 @@ namespace
     // the web page's dark theme
     const juce::Colour bench (0xff15191b), inkSoft (0xff9aa4a7), accent (0xffea6a2c);
 
-    constexpr int width = 420, screenHeight = 300; // the picture with the knob at its centre
+    constexpr int width = 400, screenHeight = 400; // the picture with the knob at its centre
     constexpr int row = 30;                        // the Circuit row over it and the Quality row under it
 
     void styleRowButton (juce::TextButton& b)
