@@ -12,6 +12,11 @@
 // Tube Screamer, Fuzz Face, tweed Champ preamp. The Quality choice picks the Mackie
 // core's preset (High is 4x oversampling like tools/render.js); for the colour
 // circuits High runs them at 4x and the other settings at 2x.
+//
+// The Mackie at High watches its own CPU use. While a passage costs more than about
+// 80% of real time (very bright, hard-driven input), it crossfades to Normal (3x), which
+// continues from the same circuit state, and goes back once High would fit again.
+// Offline bounces always run High.
 
 // The circuit the audio thread runs, whichever kind it is.
 struct ColourboxVoice
@@ -20,6 +25,8 @@ struct ColourboxVoice
     virtual void setDrive (double drive) = 0;
     virtual void process (const float* in, float* out, int n) = 0;
     virtual double latencySamples() const = 0;
+    // live playback (not an offline bounce): the Mackie at High may step down to Normal while it is overloaded
+    virtual void setLive (bool) {}
 };
 
 class ColourboxProcessor : public juce::AudioProcessor, private juce::Timer
@@ -63,7 +70,7 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout (ColourboxProcessor* self);
-    static ColourboxVoice* makeVoice (double rate, int circuit, int quality, double drive);
+    static ColourboxVoice* makeVoice (double rate, int circuit, int quality, double drive, int maxBlock);
 
     void timerCallback() override;
     int qualityIndex() const { return juce::jlimit (0, 3, (int) qualityParam->load()); }

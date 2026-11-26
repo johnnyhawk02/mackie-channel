@@ -50,6 +50,8 @@ int main (int argc, char** argv)
         if (ci < 0) { std::fprintf (stderr, "unknown CIRCUIT %s\n", cn); return 1; }
         plugin->getParameters()[2]->setValue ((float) ci / 3.0f);
     }
+    // offline (a bounce) unless LIVE=1: live, the Mackie at High steps down to Normal when it is overloaded
+    plugin->setNonRealtime (std::getenv ("LIVE") == nullptr);
     plugin->prepareToPlay (sr, block);
     const int latency = plugin->getLatencySamples();
 

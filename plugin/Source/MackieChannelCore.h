@@ -83,6 +83,8 @@ public:
     void step (const double* u, int depth = 0);
     void settle (const double* u, double T);
     void updateRV();
+    // take another circuit's physical state (same netlist, any time step): cap voltages, inductor currents, port voltages
+    void takeState (const Circuit& o) { importState (o.vr.data(), o.physI.data(), o.v.data()); uPrev = o.uPrev; }
     int outIndex (const std::string& name) const;
     void setTol (double t) { tol = t; if (fine) fine->setTol (t); } // Newton: converged when |dx|^2 < tol per port
 
@@ -148,6 +150,8 @@ public:
     double down (const double* arr, int n);
     // up and down filters together delay by taps - factor fast samples: tpp - 1 at the base rate
     double latency() const { return factor == 1 ? 0.0 : (double) (tpp - 1); }
+    // the input history is at the base rate, so it carries over between factors
+    void takeInputHistory (const Oversampler& o) { if (o.upBuf.size() == upBuf.size()) { upBuf = o.upBuf; upPos = o.upPos; } }
     int factor, tpp, taps;
     std::vector<double> h;
 private:
@@ -185,6 +189,9 @@ public:
     void process (const float* input, float* output, int n);
     Peaks readPeaks() { Peaks pk = peaks; peaks = {}; return pk; }
     double latencySamples() const { return ovs.latency(); }
+    // Continue from another channel's circuit state (the same settings at another Quality),
+    // so a crossfade between the two has no thump. No allocation: safe on the audio thread.
+    void takeStateFrom (const MackieChannel& o);
     double driveNow = 0;
 
 private:

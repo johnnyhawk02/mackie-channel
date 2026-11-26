@@ -929,6 +929,18 @@ void MackieChannel::process (const float* input, float* output, int n)
     }
 }
 
+void MackieChannel::takeStateFrom (const MackieChannel& o)
+{
+    if (lite || o.lite || ! A || ! o.A) return;
+    if (pending) { pending = false; build (false); }
+    driveNow = o.driveNow; driveMid = o.driveMid; slewCount = 0;
+    P->trimOhms = trimResistance (driveNow);
+    if (p.autoLevel) outGain = outGainBase * autoLevelGain (driveNow);
+    A->setT (T); // restamp the trim at the Drive the other channel is at
+    A->takeState (*o.A); B->takeState (*o.B); C->takeState (*o.C);
+    ovs.takeInputHistory (o.ovs);
+}
+
 // 'lite': the channel as a formula (see _processLite in the JS core)
 static const double LINE_PAD = (1 / (1 / 1500.0 + 1 / 6810.0)) / (5620 + 1 / (1 / 1500.0 + 1 / 6810.0));
 static const double LITE_TRIM = jsmath::pow (10.0, -0.3 / 20);
